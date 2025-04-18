@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::BorrowMut;
 use std::fs::OpenOptions;
 use std::fs::File;
 use pyo3::prelude::*;
@@ -75,12 +74,11 @@ static COMMUNICATIONMANAGER: OnceLock<PyObject> = OnceLock::new();
 
 //python module definitions
 #[pymodule]
-fn libcommunicationcore(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(start, m)?)?;
-    m.add_function(wrap_pyfunction!(register_communicationmanager, m)?)?;
-    m.add_function(wrap_pyfunction!(start_polling_u8, m)?)?;
-    m.add_function(wrap_pyfunction!(start_polling_u16, m)?)?;
-
+fn libcommunicationcore(m: &Bound<'_, PyModule>) -> PyResult<()>  {
+    m.add_wrapped(wrap_pyfunction!(start))?;
+    m.add_wrapped(wrap_pyfunction!(register_communicationmanager))?;
+    m.add_wrapped(wrap_pyfunction!(start_polling_u8))?;
+    m.add_wrapped(wrap_pyfunction!(start_polling_u16))?;
 
     Ok(())
 }
@@ -140,7 +138,7 @@ fn init_content(){
 
 #[pyfunction]
 //start the lib
-fn start(_py: Python,id: String,name:String,ip:u32,link_count:u32){
+fn start(_py: Python,id: String,name:String,ip:u32,link_count:u32) -> PyResult<()> {
     CONTAINERID.get_or_init(|| id.clone());
     CONTAINERNAME.get_or_init(|| name.clone());
     CONTAINERIP.get_or_init(|| ip);
@@ -196,19 +194,22 @@ fn start(_py: Python,id: String,name:String,ip:u32,link_count:u32){
     let mut communication = COMMUNICATION.lock().unwrap();
     communication.readpipe = Some(fileread);
     communication.writepipe = Some(filewrite);
+
+    Ok(())
 }
 
 
 //save reference to python
 #[pyfunction]
-fn register_communicationmanager(objectpython:PyObject){
+fn register_communicationmanager(objectpython:PyObject) -> PyResult<()> {
     COMMUNICATIONMANAGER.get_or_init(|| objectpython);
+    Ok(())
 }
 
 
 //start reading information from RM related to flows from other containers
 #[pyfunction]
-fn start_polling_u8(){
+fn start_polling_u8() -> PyResult<()> {
 
     let _handle = thread::spawn(move || {
     //buffer to hold data
@@ -254,12 +255,12 @@ fn start_polling_u8(){
         
     });
 
+    Ok(())
 }
 
 //same as u8 but for u16
 #[pyfunction]
-fn start_polling_u16(){
-
+fn start_polling_u16() -> PyResult<()> {
     let _handle = thread::spawn(move || {
         let communication = COMMUNICATION.lock().unwrap();
         let mut buf_reader = BufReader::new(communication.readpipe.as_ref().unwrap());
@@ -286,29 +287,30 @@ fn start_polling_u16(){
                 }
             }
     });
-
+    Ok(())
 }
 
 
 
 //call python to give information about flows from other containers
 fn callreceive_flow(bandwidth:u32, link_count:usize, ids:Vec<u8>){
-    let gil = Python::acquire_gil();
-    let py = gil.python();
-    let commsmanager = COMMUNICATIONMANAGER.get().expect("communicationmanager must have been initialized");
+    Python::with_gil(|py| {
+        let commsmanager = COMMUNICATIONMANAGER.get().expect("communicationmanager must have been initialized");
 
-    commsmanager.call_method(py, "receive_flow", (bandwidth, link_count, ids), None)
-                .map_err(|err| println!("{:?}", err)).ok();
+        commsmanager.call_method(py, "receive_flow", (bandwidth, link_count, ids), None)
+                    .map_err(|err| println!("{:?}", err)).ok();
+
+    });
 }
 
 //call python to give information about flows from other containers
 fn callreceive_flow_16(bandwidth:u32, link_count:u16, ids:Vec<u16>){
-    let gil = Python::acquire_gil();
-    let py = gil.python();
-    let commsmanager = COMMUNICATIONMANAGER.get().expect("communicationmanager must have been initialized");
+    Python::with_gil(|py| {
+        let commsmanager = COMMUNICATIONMANAGER.get().expect("communicationmanager must have been initialized");
 
-    commsmanager.call_method(py,"receive_flow",(bandwidth,link_count,ids),None)
-                .map_err(|err| println!("{:?}", err)).ok();
+        commsmanager.call_method(py,"receive_flow",(bandwidth,link_count,ids),None)
+                    .map_err(|err| println!("{:?}", err)).ok();
+    });
 }
 
 fn print_message(message_to_print: String){
