@@ -34,16 +34,12 @@ use crate::aux::{print_message,has_dashboard,retrieve_local_ids,retrieve_remote_
 use std::sync::{Arc, Mutex};
 use std::fs::File;
 
-pub mod messages_capnp {
-    include!(concat!(env!("OUT_DIR"), "/src/messages_capnp.rs"));
-}
-
 use capnp::serialize_packed;
 use capnp::message::{Builder, HeapAllocator};
-use crate::messages_capnp::message;
+use capnp_schemas::message_capnp::message;
 use std::io::BufReader;
 
-static mut CONTAINERS:Option<Vec<Arc<Mutex<Container>>>> = None;
+// static mut CONTAINERS:Option<Vec<Arc<Mutex<Container>>>> = None;
 
 
 fn main()-> Result<()>{
@@ -95,9 +91,10 @@ fn main()-> Result<()>{
 
     let containers = get_containers(local_ids.clone(),"/tmp/piperead".to_string()).clone();
 
-    unsafe{
-        CONTAINERS = Some(containers);
-    }
+
+//    unsafe{
+//        CONTAINERS = Some(containers);
+//    }
 
 
     start_remote_producers(addr,local_ids.clone(),remote_ips.clone(),has_dashboard);
@@ -530,29 +527,21 @@ fn start_message_exchange(vector_ids:Vec<String>,remote_ips:Vec<String>,dashboar
 }
 
 //receives metadata from other hosts
-fn remote_producer<'a>(stream:TcpStream) {
+fn remote_producer<'a>(stream:TcpStream, containers: &Vec<Arc<Mutex<Container>>>) {
 
     print_message("STARTED REMOTE PRODUCER".to_string()).expect("Couldn't add to file");    
 
     let mut buf_reader = BufReader::new(stream);
 
-        loop{
+        loop {
 
             let message_reader = serialize_packed::read_message(buf_reader.borrow_mut(),capnp::message::ReaderOptions::new()).unwrap(); 
 
             let mut message_to_send: Builder<HeapAllocator> = capnp::message::Builder::new_default();
                         
             message_to_send.set_root(message_reader.get_root::<message::Reader>().unwrap()).expect("Failed to set root");
-            unsafe{
-                for pipe in CONTAINERS.as_ref().unwrap(){
-
-                    pipe.lock().unwrap().write(message_to_send.borrow());
-                } 
-            }
-
+            containers.iter().for_each(|pipe| pipe.lock().unwrap().write(&message_to_send));
         }
-
-    
 }
 
 //accepts connections from other hosts
