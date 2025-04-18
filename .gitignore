@@ -121,3 +121,5 @@ trace_dumps/*
 kube/config
 
 !libcommunicationcore.so
+
+Cargo.lock
