@@ -18,8 +18,6 @@ use std::borrow::BorrowMut;
 use std::env;
 use std::io::prelude::*;
 use std::thread;
-//use async_std::task;
-//use async_std::task::block_on;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::HashMap;
 use std::net::Shutdown;
@@ -30,10 +28,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 mod select;
 use crate::select::{FdSet, select};
 mod aux;
-use crate::aux::{
-    Container, clone_pipes, get_containers, get_uint16, has_dashboard, print_message, put_uint16,
-    retrieve_local_ids, retrieve_remote_ips, wait_for_pipe_creation,
-};
+use crate::aux::*;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
@@ -58,7 +53,7 @@ fn main() -> Result<()> {
 
     print_message(format!("{:?}", remote_ips)).expect("Couldn't add to file");
 
-    setup(remote_ips.clone(), containercount, addr.clone());
+    setup(remote_ips.clone(), containercount, addr.clone())?;
 
     // let handle = thread::spawn(move || {setup});
     // handle.join();
@@ -73,17 +68,17 @@ fn main() -> Result<()> {
     //print_message(format!("{:?}",remote_ips)).expect("Couldn't add to file");
 
     //wait for EM's to create pipes
-    print_message("Waiting for pipes".to_string());
+    print_message("Waiting for pipes".to_string())?;
     wait_for_pipe_creation(local_ids.clone(), "/tmp/piperead".to_string());
 
     wait_for_pipe_creation(local_ids.clone(), "/tmp/pipewrite".to_string());
-    print_message("Pipes created".to_string());
+    print_message("Pipes created".to_string())?;
 
     //start exchanging of information
     //let handle = thread::spawn(move || {start(addr,local_ids,remote_ips,has_dashboard)});
     //handle.join();
 
-    let containers = get_containers(local_ids.clone(), "/tmp/piperead".to_string()).clone();
+    let containers = get_containers(local_ids.clone(), "/tmp/piperead".to_string());
 
     start_remote_producers(
         addr,
@@ -98,7 +93,7 @@ fn main() -> Result<()> {
         remote_ips.clone(),
         has_dashboard.clone(),
         containers.clone(),
-    );
+    )?;
 
     Ok(())
 }
@@ -139,7 +134,7 @@ fn setup(remote_ips: Vec<String>, containercount: usize, addr: String) -> Result
     }
 
     let sleeptime = time::Duration::from_millis(1000);
-    print_message("Starting to connect to other machines ".to_string());
+    print_message("Starting to connect to other machines ".to_string())?;
 
     //connect to other machines
     let mut streams = vec![];
@@ -148,12 +143,12 @@ fn setup(remote_ips: Vec<String>, containercount: usize, addr: String) -> Result
         thread::sleep(sleeptime);
         for (i, remote_ip) in remote_ips.clone().iter().enumerate() {
             if !(ips_connected.contains(&i)) {
-                print_message(format!("CONNECTING TO {}", remote_ip.clone()));
+                print_message(format!("CONNECTING TO {}", remote_ip.clone()))?;
                 let stream = TcpStream::connect(remote_ip.clone());
                 match stream {
                     Ok(stream) => {
                         streams.push(stream);
-                        print_message(format!("CONNECTED TO {} pos is {}", remote_ip.clone(), i));
+                        print_message(format!("CONNECTED TO {} pos is {}", remote_ip.clone(), i))?;
                         ips_connected.push(i.clone());
                     }
                     Err(e) => println!("{}", e.to_string()),
@@ -166,7 +161,7 @@ fn setup(remote_ips: Vec<String>, containercount: usize, addr: String) -> Result
         wait_until_containers_start(streams, containercount, channelvecreceiver.clone())
     });
 
-    handle.join();
+    let _ = handle.join();
     print_message("SETUP ENDED".to_string()).expect("Couldn't add to file");
 
     Ok(())
@@ -201,12 +196,12 @@ fn wait_until_containers_start(
 
             match bytes {
                 Ok(n) => {
-                    stream.flush();
-                    print_message(format!("Wrote {} to {}", n, stream_count).to_string());
+                    let _ = stream.flush();
+                    print_message(format!("Wrote {} to {}", n, stream_count).to_string())?;
                     stream_count += 1;
                 }
                 Err(e) => {
-                    print_message(format!("Err: {} to {}", e, stream_count).to_string());
+                    print_message(format!("Err: {} to {}", e, stream_count).to_string())?;
                 }
             };
         }
@@ -247,7 +242,7 @@ fn wait_until_containers_start(
         //check if all machines started if yes, send message to end the setup
         //print_message(format!("local ids count is {}",local_ids.len()));
         if count + local_ids.len() == containercount as usize {
-            print_message("Finishing setup \n".to_string());
+            print_message("Finishing setup \n".to_string())?;
             buffer.push(1);
             for mut stream in &streams {
                 stream.write(&buffer).expect("Failed to write to stream");
@@ -278,29 +273,12 @@ fn accept_setup_loop(
     let addr = format!("{}{}", addr, ":8080");
     print_message(format!("ACCEPT_SETUP_LOOP STARTED on {}", addr.to_string()))
         .expect("Couldn't add to file");
-    let listener = TcpListener::bind(addr.clone()).unwrap();
 
-    let mut incoming = listener.incoming();
+    let listener = TcpListener::bind(addr.clone()).unwrap();
 
     let remotecount = Arc::new(Mutex::new(0));
 
     let mut vector_handles = vec![];
-    // while let Some(stream) = incoming.next(){
-    //     let mut remotecount = remotecount.lock().unwrap();
-    //     let stream = stream?;
-    //     let peer_addr = stream.peer_addr()?;
-    //     print_message(format!("Accepted {} count is {}",remotecount,peer_addr));
-    //     let join_handle = task::spawn(receive_container_count(stream,peer_addr.to_string().clone(),sender[*remotecount].clone()));
-    //     print_message(format!("Created task {} for peer {}",remotecount,peer_addr));
-    //     vector_handles.push(join_handle);
-
-    //     *remotecount += 1;
-
-    //     if *remotecount == number_of_remotes{
-    //         break;
-    //     }
-
-    // }
 
     for stream in listener.incoming() {
         match stream {
@@ -310,7 +288,7 @@ fn accept_setup_loop(
                 let peer_addr = stream.peer_addr()?;
 
                 let sender_channel = sender[*remotecount].clone();
-                print_message(format!("Accepted {} count is {}", remotecount, peer_addr));
+                print_message(format!("Accepted {} count is {}", remotecount, peer_addr))?;
                 let join_handle = thread::spawn(move || {
                     receive_container_count(
                         stream,
@@ -321,7 +299,7 @@ fn accept_setup_loop(
                 print_message(format!(
                     "Created task {} for peer {}",
                     remotecount, peer_addr
-                ));
+                ))?;
                 vector_handles.push(join_handle);
 
                 *remotecount += 1;
@@ -331,13 +309,13 @@ fn accept_setup_loop(
                 }
             }
             Err(e) => {
-                print_message("Failed".to_string());
+                print_message(e.to_string())?;
             }
         };
     }
 
     for handle in vector_handles {
-        handle.join();
+        let _ = handle.join();
     }
     print_message(format!("ACCEPT_SETUP_LOOP ENDED ")).expect("Couldn't add to file");
 
@@ -346,29 +324,29 @@ fn accept_setup_loop(
 
 //reads from the other hosts how many containers they started
 fn receive_container_count(mut stream: TcpStream, _peer: String, sender: Sender<u16>) {
-    print_message(format!("Started for peer {}", _peer).to_string());
+    let _ = print_message(format!("Started for peer {}", _peer).to_string());
 
     loop {
         let mut buffer = [0; 3];
-        print_message(format!("Trying to read from peer {}", _peer).to_string());
+        let _ = print_message(format!("Trying to read from peer {}", _peer).to_string());
         let _n = match stream.read(&mut buffer) {
             Ok(n) => n,
             Err(e) => {
-                print_message(format!("failed to read from socket; err = {:?}", e).to_string());
+                let _ = print_message(format!("failed to read from socket; err = {:?}", e).to_string());
                 0
             }
         };
         //print_message(format!("Read from peer {}",_peer).to_string());
         //end of loop message
         if buffer[2] == 1 {
-            print_message("Ended loop".to_string());
+            let _ = print_message("Ended loop".to_string());
             let containers = get_uint16(buffer, 0);
-            sender.send(containers).map_err(|err| println!("{:?}", err));
+            let _ = sender.send(containers).map_err(|err| println!("{:?}", err));
             break;
         }
         let containers = get_uint16(buffer, 0);
         //print_message(format!("Trying to send from rcc peer {}",_peer).to_string());
-        sender.send(containers).map_err(|err| println!("{:?}", err));
+        let _ = sender.send(containers).map_err(|err| println!("{:?}", err));
         //print_message(format!("Sent from rcc peer {}",_peer).to_string());
 
         // let send_result = sender.try_send(containers);
@@ -392,9 +370,9 @@ fn receive_container_count(mut stream: TcpStream, _peer: String, sender: Sender<
 //starts the exchange of  metadata
 fn start_remote_producers(
     addr: String,
-    local_ids: Vec<String>,
+    _local_ids: Vec<String>,
     remote_ips: Vec<String>,
-    has_dashboard: bool,
+    _has_dashboard: bool,
     containers: Vec<Arc<Mutex<Container>>>,
 ) {
     print_message("ENTERED START".to_string()).expect("Couldn't add to file");
@@ -510,7 +488,7 @@ fn start_message_exchange(
             None,                         // error//
 //            Some(&make_timeval(time::Duration::from_millis(1))))
             None) // timeout
-            {
+        {
             Ok(_res) => {
                 for i in &vector_fd{
                     if (fd_set).is_set(*i) {
@@ -595,7 +573,7 @@ fn accept_loop(count: usize, addr: String, containers: Vec<Arc<Mutex<Container>>
         let peer_addr = stream.peer_addr()?;
         let containers = containers.clone();
 
-        print_message(format!("PEER IS : {}", peer_addr).to_string());
+        print_message(format!("PEER IS : {}", peer_addr).to_string())?;
 
         //Start remote producer
         thread::spawn(move || remote_producer(stream, &containers));

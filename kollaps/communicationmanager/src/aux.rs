@@ -242,14 +242,14 @@ pub fn get_uint16(buffer: [u8; 3], index: usize) -> u16 {
 
 pub fn print_message(message: String) -> Result<()> {
     let message = format!("RUST GOD: {} \n", message);
-    //println!("{}",message);
+
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .append(true)
-        .open("/logs.txt")
-        .unwrap();
-    file.write_all(message.as_bytes())
-        .expect("Unable to write data");
+        .open("/logs.txt")?;
+
+    file.write_all(message.as_bytes())?;
+
     Ok(())
 }

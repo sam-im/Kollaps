@@ -75,7 +75,7 @@ pub fn select(
     }
 }
 
-pub fn make_timeval(duration: time::Duration) -> libc::timeval {
+pub fn _make_timeval(duration: time::Duration) -> libc::timeval {
     libc::timeval {
         tv_sec: duration.as_secs() as i64,
         tv_usec: duration.subsec_micros() as i64,
