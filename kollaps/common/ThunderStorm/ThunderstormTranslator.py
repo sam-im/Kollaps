@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-from kollaps.Kollapslib.ThunderStorm.Generator import ndl_generate
-from kollaps.Kollapslib.ThunderStorm.Parser import ndl_parse
+from ThunderStorm.Generator import ndl_generate
+from ThunderStorm.Parser import ndl_parse
 
 import sys
 import argparse

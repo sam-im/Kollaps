@@ -18,12 +18,12 @@
 import sys
 import os
 
-from kollaps.Kollapslib.NetGraph import NetGraph
-from kollaps.Kollapslib.XMLGraphParser import XMLGraphParser
-from kollaps.Kollapslib.deploymentGenerators.DockerComposeFileGenerator import DockerComposeFileGenerator
-from kollaps.Kollapslib.deploymentGenerators.KubernetesManifestGenerator import KubernetesManifestGenerator
-from kollaps.Kollapslib.utils import SHORT_LIMIT
-from kollaps.Kollapslib.utils import print_message, print_error, print_and_fail
+from NetGraph import NetGraph
+from XMLGraphParser import XMLGraphParser
+from deploymentGenerators.DockerComposeFileGenerator import DockerComposeFileGenerator
+from deploymentGenerators.KubernetesManifestGenerator import KubernetesManifestGenerator
+from utils import SHORT_LIMIT
+from utils import print_and_fail
 
 
 def main():
