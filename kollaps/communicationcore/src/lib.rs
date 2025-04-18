@@ -13,23 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate libc;
 use std::borrow::BorrowMut;
 use std::fs::OpenOptions;
-use std::io::prelude::*;
 use std::fs::File;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use std::thread;
 use std::ffi::CString;
-
-pub mod messages_capnp {
-    include!(concat!(env!("OUT_DIR"), "/src/messages_capnp.rs"));
-}
-
 use capnp::serialize_packed;
-use capnp::message::{Builder, HeapAllocator};
-use crate::messages_capnp::message;
+use capnp_schemas::message_capnp::message;
 use std::io::BufReader;
 
 pub struct FdSet(libc::fd_set);

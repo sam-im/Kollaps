@@ -1,19 +1,15 @@
 [package]
 name = "communicationcore"
 version = "0.1.0"
-edition = "2021"
-build = "src/build.rs"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 libc = "0.2"
-capnp = "0.18.3"
-capnpc = "0.17.0"
 os_pipe = "1.1.4"
-
-[build-dependencies]
-capnpc = "0.17.0"
+capnp = "0.21"
+capnp-schemas = { path = "../capnp-schemas" }
 
 [lib]
 name = "communicationcore"
