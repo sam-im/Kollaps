@@ -14,31 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from locale import DAY_1
-import socket
-import struct
 from os import environ, getenv
 from collections import OrderedDict
 from threading import Lock, Thread
 from time import sleep
 
-import dns.resolver
 from kubernetes import client, config
-
-from flask import Flask, render_template, request, flash, redirect, url_for, jsonify, json
+from openssh_wrapper import SSHConnection
+from flask import Flask, render_template, request, redirect, url_for
 
 from kollaps.Kollapslib.NetGraph import NetGraph
 from kollaps.Kollapslib.XMLGraphParser import XMLGraphParser
-from kollaps.Kollapslib.utils import int2ip, ip2int, setup_container, CONTAINER, BYTE_LIMIT
-from kollaps.Kollapslib.utils import print_message, print_error, print_and_fail, print_named
+from kollaps.Kollapslib.utils import int2ip, ip2int, setup_container, CONTAINER
+from kollaps.Kollapslib.utils import print_message, print_error, print_named
 
-import sys
+import dns.resolver
 import libcommunicationcore
-import pathlib
-
-from openssh_wrapper import SSHConnection
-if sys.version_info >= (3, 0):
-    from typing import Dict, List, Tuple
+import socket
+import struct
+import sys
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = 'sdjh234hj23409ea9[u-ad=12-eqhkdjaadj23jaksldj23objadskjalskdj-1=1dadsd;akdaldm11pnf'
