@@ -23,20 +23,21 @@ use std::ffi::CString;
 use capnp::serialize_packed;
 use capnp_schemas::message_capnp::message;
 use std::io::BufReader;
+use std::sync::{OnceLock, LazyLock, Mutex};
 
 pub struct FdSet(libc::fd_set);
 
 //docker container id
-static mut CONTAINERID:Option<String> = None;
+static CONTAINERID: OnceLock<String> = OnceLock::new();
 
 //docker container name
-static mut CONTAINERNAME:Option<String> = None;
+static CONTAINERNAME: OnceLock<String> = OnceLock::new();
 
 //ip of container in int (smallendian)
-static mut CONTAINERIP:u32 = 0;
+static CONTAINERIP: OnceLock<u32> = OnceLock::new();
 
 //limit of links in topology
-static mut CONTAINERLIMIT:u32 = 0;
+static CONTAINERLIMIT: OnceLock<u32> = OnceLock::new();
 
 //pipe to write to RM, pipe to read from RM, pipe to read local usage from RM
 struct Communication {
@@ -52,21 +53,24 @@ struct Message{
 }
 
 //init global
-static mut COMMUNICATION:Communication = Communication{
-    writepipe: None,
-    readpipe: None,
-    buf_reader: None,
-};
+static COMMUNICATION: LazyLock<Mutex<Communication>> = LazyLock::new(|| {
+    Mutex::new(Communication {
+        writepipe: None,
+        readpipe: None,
+        buf_reader: None,
+    })
+});
 
 //init message (always the same struct all function write to and read from this)
-static mut MESSAGE:Message = Message{
-    content: Vec::new(),
-    //where the to start writing information to
-    index: 0,
-};
+static MESSAGE: LazyLock<Mutex<Message>> = LazyLock::new(|| {
+    Mutex::new(Message {
+        content: Vec::new(),
+        index: 0  //where the to start writing information to
+    })
+});
 
 //python reference
-static mut COMMUNICATIONMANAGER: Option<PyObject> = None;
+static COMMUNICATIONMANAGER: OnceLock<PyObject> = OnceLock::new();
 
 
 //python module definitions
@@ -87,11 +91,9 @@ fn libcommunicationcore(_py: Python, m: &PyModule) -> PyResult<()> {
 
 
 fn put_uint16(index:usize,value:u32){
-
-    unsafe{
-        MESSAGE.content[index] = ((value >> 0) & 0xff) as u8;
-        MESSAGE.content[index+1] = ((value >> 8) & 0xff) as u8;
-    }
+    let mut message = MESSAGE.lock().unwrap();
+    message.content[index] = ((value >> 0) & 0xff) as u8;
+    message.content[index+1] = ((value >> 8) & 0xff) as u8;
 }
 
 /*fn put_uint32_in_buffer(value:u32) -> [u8;4]{
@@ -126,9 +128,8 @@ fn get_uint32(buffer:&Vec<u8>,index:usize) -> u32{
 
 
 fn init_content(){
-    unsafe{
-        MESSAGE.content.resize(512,0);
-    }
+    let mut message = MESSAGE.lock().unwrap();
+    message.content.resize(512, 0);
 }
 
 
@@ -140,19 +141,15 @@ fn init_content(){
 #[pyfunction]
 //start the lib
 fn start(_py: Python,id: String,name:String,ip:u32,link_count:u32){
-
-    unsafe{
-        CONTAINERID = Some(id.clone());
-        CONTAINERNAME = Some(name.clone());
-        CONTAINERIP = ip;
-        if link_count <= 255{
-            CONTAINERLIMIT = 8
+    CONTAINERID.get_or_init(|| id.clone());
+    CONTAINERNAME.get_or_init(|| name.clone());
+    CONTAINERIP.get_or_init(|| ip);
+    CONTAINERLIMIT.get_or_init(|| {
+        match link_count {
+            n if n <= 255 => 8,
+            _ => 16
         }
-        else{
-            CONTAINERLIMIT = 16
-        }
-        
-    }
+    });
 
     //create files
     let pathwrite = "/tmp/pipewrite";
@@ -196,21 +193,16 @@ fn start(_py: Python,id: String,name:String,ip:u32,link_count:u32){
 
     print_message("GOT WRITE PIPE".to_string());
 
-    unsafe{
-        COMMUNICATION.readpipe = Some(fileread);
-        COMMUNICATION.writepipe = Some(filewrite);
-    }
-
+    let mut communication = COMMUNICATION.lock().unwrap();
+    communication.readpipe = Some(fileread);
+    communication.writepipe = Some(filewrite);
 }
 
 
 //save reference to python
 #[pyfunction]
 fn register_communicationmanager(objectpython:PyObject){
-
-    unsafe{
-        COMMUNICATIONMANAGER = Some(objectpython);
-    }
+    COMMUNICATIONMANAGER.get_or_init(|| objectpython);
 }
 
 
@@ -220,7 +212,7 @@ fn start_polling_u8(){
 
     let _handle = thread::spawn(move || {
     //buffer to hold data
-    let mut receive_buffer = vec![0;1024];
+    let mut _receive_buffer = vec![0;1024];
     loop{
 
         // unsafe{
@@ -269,44 +261,30 @@ fn start_polling_u8(){
 fn start_polling_u16(){
 
     let _handle = thread::spawn(move || {
-        //buffer to hold data
+        let communication = COMMUNICATION.lock().unwrap();
+        let mut buf_reader = BufReader::new(communication.readpipe.as_ref().unwrap());
 
-        unsafe{
+            loop{
+                let message_reader = serialize_packed::read_message(&mut buf_reader, capnp::message::ReaderOptions::new()).unwrap();
 
-            let mut buf_reader = BufReader::new(COMMUNICATION.readpipe.as_ref().unwrap());
+                let message = message_reader.get_root::<message::Reader>().unwrap();
 
-                loop{
-                
-                    let message_reader = serialize_packed::read_message(buf_reader.borrow_mut(),capnp::message::ReaderOptions::new()).unwrap();
-       
+                let flows = message.get_flows().unwrap();
 
-                    let message = message_reader.get_root::<message::Reader>().unwrap();
+                for flow in flows{
+                    let bandwidth = flow.get_bw();
+                    let links = flow.get_links().unwrap();
+                    let link_count = links.len() as u16;
 
-                    let mut flows = message.get_flows().unwrap();
+                    let mut ids = vec![];
 
-                    for flow in flows{
+                    for i in 0..link_count {
+                        ids.push(links.get(i as u32).get_id());
+                    }
 
-                        let bandwidth = flow.get_bw();
-
-                        let links = flow.get_links().unwrap();
-
-                        let link_count = links.len() as u16;
-
-                        let mut ids = vec![];
-
-
-                        for i in (0..link_count){
-                            ids.push(links.get(i as u32).get_id());
-                        } 
-
-
-                        callreceive_flow_16(bandwidth,link_count,ids);
-                    } 
-
-
+                    callreceive_flow_16(bandwidth, link_count, ids);
                 }
-
-        }
+            }
     });
 
 }
@@ -314,27 +292,28 @@ fn start_polling_u16(){
 
 
 //call python to give information about flows from other containers
-fn callreceive_flow(bandwidth:u32,link_count:usize,ids:Vec<u8>){
+fn callreceive_flow(bandwidth:u32, link_count:usize, ids:Vec<u8>){
     let gil = Python::acquire_gil();
     let py = gil.python();
-    unsafe{
-        COMMUNICATIONMANAGER.as_ref().unwrap().call_method(py,"receive_flow",(bandwidth,link_count,ids),None).map_err(|err| println!("{:?}", err)).ok();
-    }
+    let commsmanager = COMMUNICATIONMANAGER.get().expect("communicationmanager must have been initialized");
+
+    commsmanager.call_method(py, "receive_flow", (bandwidth, link_count, ids), None)
+                .map_err(|err| println!("{:?}", err)).ok();
 }
 
 //call python to give information about flows from other containers
-fn callreceive_flow_16(bandwidth:u32,link_count:u16,ids:Vec<u16>){
+fn callreceive_flow_16(bandwidth:u32, link_count:u16, ids:Vec<u16>){
     let gil = Python::acquire_gil();
     let py = gil.python();
-    unsafe{
-        COMMUNICATIONMANAGER.as_ref().unwrap().call_method(py,"receive_flow",(bandwidth,link_count,ids),None).map_err(|err| println!("{:?}", err)).ok();
-    }
+    let commsmanager = COMMUNICATIONMANAGER.get().expect("communicationmanager must have been initialized");
+
+    commsmanager.call_method(py,"receive_flow",(bandwidth,link_count,ids),None)
+                .map_err(|err| println!("{:?}", err)).ok();
 }
 
-fn print_message(message_to_print:String){
-    let message;
-    unsafe{
-        message = Some(format!("RUST EC - {} : {} ",CONTAINERNAME.as_ref().unwrap(),message_to_print));
-    }
-    println!("{}",message.as_ref().unwrap());
+fn print_message(message_to_print: String){
+    let container_name = CONTAINERNAME.get_or_init(|| "containername not initialized".to_string());
+    let message = format!("RUST EC - {} : {}", container_name, message_to_print);
+
+    println!("{}",message);
 }
