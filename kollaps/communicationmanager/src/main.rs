@@ -39,8 +39,6 @@ use capnp::message::{Builder, HeapAllocator};
 use capnp_schemas::message_capnp::message;
 use std::io::BufReader;
 
-// static mut CONTAINERS:Option<Vec<Arc<Mutex<Container>>>> = None;
-
 
 fn main()-> Result<()>{
 
@@ -91,15 +89,9 @@ fn main()-> Result<()>{
 
     let containers = get_containers(local_ids.clone(),"/tmp/piperead".to_string()).clone();
 
+    start_remote_producers(addr,local_ids.clone(),remote_ips.clone(),has_dashboard, containers.clone());
 
-//    unsafe{
-//        CONTAINERS = Some(containers);
-//    }
-
-
-    start_remote_producers(addr,local_ids.clone(),remote_ips.clone(),has_dashboard);
-
-    start_message_exchange(local_ids.clone(),remote_ips.clone(),has_dashboard.clone());
+    start_message_exchange(local_ids.clone(),remote_ips.clone(),has_dashboard.clone(), containers.clone());
 
 
     Ok(())
@@ -365,14 +357,14 @@ fn receive_container_count(mut stream:TcpStream,_peer:String,sender:Sender<u16>)
 **********************************************************************************************/
 
 //starts the exchange of  metadata
-fn start_remote_producers(addr:String,local_ids:Vec<String>,remote_ips:Vec<String>,has_dashboard:bool){
+fn start_remote_producers(addr:String,local_ids:Vec<String>,remote_ips:Vec<String>,has_dashboard:bool, containers: Vec<Arc<Mutex<Container>>>){
 
     print_message("ENTERED START".to_string()).expect("Couldn't add to file");
     
     //Start accept loop that will start threads to receive metadata from other hosts
     if remote_ips.len() != 0{
         //let accept_loop = accept_loop(remote_ips.len().clone(),addr,containers.clone());
-        thread::spawn(move ||{accept_loop(remote_ips.len().clone(),addr)});
+        thread::spawn(move ||{accept_loop(remote_ips.len().clone(),addr, containers)});
     }
 
     let sleeptime = time::Duration::from_millis(1000);
@@ -387,7 +379,7 @@ fn start_remote_producers(addr:String,local_ids:Vec<String>,remote_ips:Vec<Strin
 *       start of information exchange
 **********************************************************************************************/
 
-fn start_message_exchange(vector_ids:Vec<String>,remote_ips:Vec<String>,dashboard:bool)-> Result<()>{
+fn start_message_exchange(vector_ids:Vec<String>,remote_ips:Vec<String>,dashboard:bool, containers: Vec<Arc<Mutex<Container>>>)-> Result<()>{
 
     print_message("STARTED MESSAGE EXCHANGE".to_string()).expect("Couldn't add to file");
 
@@ -416,10 +408,7 @@ fn start_message_exchange(vector_ids:Vec<String>,remote_ips:Vec<String>,dashboar
         pipes_read.push(buf_reader);
 
         //containers every pipe but the one respective to vectorids[i]
-        let pipes;
-        unsafe{
-            pipes = clone_pipes(vector_ids[i].clone(),CONTAINERS.as_ref().unwrap());
-        }
+        let pipes = clone_pipes(vector_ids[i].clone(), &containers);
 
         vector_pipes_id.push(pipes);
     }
@@ -545,7 +534,7 @@ fn remote_producer<'a>(stream:TcpStream, containers: &Vec<Arc<Mutex<Container>>>
 }
 
 //accepts connections from other hosts
-fn accept_loop(count:usize,addr:String) -> Result<()>{
+fn accept_loop(count:usize,addr:String, containers: Vec<Arc<Mutex<Container>>>) -> Result<()>{
 
     //Bind the socket to the process
 
@@ -561,11 +550,12 @@ fn accept_loop(count:usize,addr:String) -> Result<()>{
 
         let stream = stream?;
         let peer_addr = stream.peer_addr()?;
+        let containers = containers.clone();
         
         print_message(format!("PEER IS : {}",peer_addr).to_string());
 
         //Start remote producer
-        thread::spawn( || {remote_producer(stream)});
+        thread::spawn(move || {remote_producer(stream, &containers)});
 
         peers+=1;
         
