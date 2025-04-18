@@ -18,15 +18,18 @@
 import socket
 import random
 import os
+import sys
 
 from os import getenv
 from subprocess import Popen
 from multiprocessing import Process
 from time import sleep
 
-from kollaps.Kollapslib.utils import int2ip, ip2int
-from kollaps.Kollapslib.utils import print_error, print_and_fail, print_named, print_error_named
-from kollaps.Kollapslib.utils import LOCAL_IPS_FILE, REMOTE_IPS_FILE, GOD_IPS_SHARE_PORT
+from kollaps.common.utils import int2ip, ip2int
+from kollaps.common.utils import print_error, print_and_fail, print_named, print_error_named
+from kollaps.common.utils import LOCAL_IPS_FILE, REMOTE_IPS_FILE, GOD_IPS_SHARE_PORT
+from kollaps.common.bootstrapping.SwarmBootstrapper import SwarmBootstrapper
+from kollaps.common.bootstrapping.KubernetesBootstrapper import KubernetesBootstrapper
 
 
 class Bootstrapper(object):
@@ -200,4 +203,43 @@ class Bootstrapper(object):
         msg = "This is just a super class. I does not know what to do.\n"
         msg += "Please verify that the code is calling one of the appropriate orchestrator bootstrappers."
         print_error_named("Bootstrapper", msg)
-    
+
+
+def main():
+    try:
+        if len(sys.argv) < 3:
+            msg = "If you are calling " + sys.argv[0] + " from your workstation stop."
+            msg += "This should only be used inside containers."
+
+            sleep(20)
+
+            print_and_fail(msg)
+
+        mode = sys.argv[1]
+        label = sys.argv[2]
+        bootstrapper_id = sys.argv[3] if len(sys.argv) > 3 else None
+
+        bootstrapper = None
+        orchestrator = os.getenv('KOLLAPS_ORCHESTRATOR', 'swarm')
+
+        if orchestrator == 'kubernetes':
+            bootstrapper = KubernetesBootstrapper()
+
+        elif orchestrator == 'swarm':
+            bootstrapper = SwarmBootstrapper()
+
+        # insert here any other bootstrappping class required by new orchestrators
+        else:
+            print_named("bootstrapper", "Unrecognized orchestrator. Using default: Docker Swarm.")
+            bootstrapper = SwarmBootstrapper()
+
+        bootstrapper.bootstrap(mode, label, bootstrapper_id)
+
+    except Exception as e:
+        sys.stdout.flush()
+        print_error(e)
+        sleep(20)
+
+
+if __name__ == '__main__':
+    main()
