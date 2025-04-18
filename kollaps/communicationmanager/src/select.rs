@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::os::unix::io::RawFd;
 use std::{io, mem, ptr, time};
-use std::os::unix::io::{RawFd};
 pub struct FdSet(libc::fd_set);
 
 impl FdSet {
