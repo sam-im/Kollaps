@@ -14,5 +14,5 @@ structures in the `ebpfs-progs` crate.
 
 # Generating new bindings
 Run the following in the root of the workspace to generate bindings:
-`cargo run --package ebpf-xtask -- codegen ebpf-progs/src/bindings.rs`
+`cargo run --package ebpf-xtask -- codegen monitor-ebpf/src/bindings.rs`
 

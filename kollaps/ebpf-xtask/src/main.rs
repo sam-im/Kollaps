@@ -19,7 +19,7 @@ fn main() -> Result<()> {
                 aya_tool::generate::InputFile::Btf(std::path::PathBuf::from(
                     "/sys/kernel/btf/vmlinux",
                 )),
-                &["iphdr"],
+                &["iphdr", "ethhdr"],
                 &[],
             )
             .context("generate")?;
