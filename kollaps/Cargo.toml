@@ -3,5 +3,6 @@ resolver = "3"
 members = [
     "communicationcore",
     "communicationmanager",
-    "capnp-schemas"
+    "capnp-schemas",
+    "ebpf-xtask"
 ]

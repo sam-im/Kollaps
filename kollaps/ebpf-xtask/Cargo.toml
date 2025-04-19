@@ -1,0 +1,9 @@
+[package]
+name = "ebpf-xtask"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5.37", features = ["derive"] }
+aya-tool = { git = "https://github.com/aya-rs/aya" }
