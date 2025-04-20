@@ -6,7 +6,8 @@ members = [
     "capnp-schemas",
     "monitor",
     "monitor-common",
-    "monitor-ebpf"
+    "monitor-ebpf",
+    "emulationcore",
 ]
 
 # do not add monitor-ebpf to default-members or else (it won't compile)
@@ -15,7 +16,8 @@ default-members = [
     "monitor-common",
     "communicationcore",
     "communicationmanager",
-    "capnp-schemas"
+    "capnp-schemas",
+    "emulationcore",
 ]
 
 # included by aya-rs project template

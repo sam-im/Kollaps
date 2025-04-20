@@ -23,7 +23,7 @@ use std::thread;
 use crate::aux::print_message;
 use capnp::serialize_packed;
 use capnp::message::{Builder, HeapAllocator};
-use crate::messages_capnp::message;
+use capnp_schemas::message_capnp;
 use std::io::BufReader;
 use libc::O_WRONLY;
 
@@ -94,7 +94,7 @@ impl Communication{
     }
 
 
-    pub fn init_message<'a>(&mut self,mut msg:message::Builder<'a>, round_number:u32,flow_count:u32){
+    pub fn init_message<'a>(&mut self,mut msg: message_capnp::message::Builder<'a>, round_number:u32,flow_count:u32){
     
         msg.set_round(round_number);
         msg.init_flows(flow_count);
@@ -103,7 +103,7 @@ impl Communication{
     }
 
 
-    pub fn add_flow<'a>(&mut self,msg:message::Builder<'a>, bandwidth:u32,len_links:u32,links_vector:Vec<u16>,flow_number:u32){
+    pub fn add_flow<'a>(&mut self,msg: message_capnp::message::Builder<'a>, bandwidth:u32,len_links:u32,links_vector:Vec<u16>,flow_number:u32){
 
         let flows = msg.get_flows().unwrap();
 
@@ -143,7 +143,7 @@ fn start_polling_u16(state:Arc<Mutex<State>>,readpipe:Arc<Mutex<Option<File>>>){
             let message_reader = serialize_packed::read_message(filereader.borrow_mut(),capnp::message::ReaderOptions::new()).unwrap();
 
             
-            let message: message::Reader<'_> = match message_reader.get_root::<message::Reader>(){
+            let message: message_capnp::message::Reader<'_> = match message_reader.get_root::<message_capnp::message::Reader>(){
                 Ok(message)=>{
                     message
                 },

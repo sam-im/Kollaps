@@ -1,14 +1,14 @@
+use monitor;
+use capnp_schemas::message_capnp;
+use capnp::message::{Builder, HeapAllocator};
 
 use std::sync::{Arc, Mutex};
 use crate::xmlgraphparser::XMLGraphParser;
-//use crate::xmlgraphparserelement::{XMLGraphParser};
 use crate::communication::Communication;
 use crate::eventscheduler::EventScheduler;
 use crate::state::State;
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
-use redbpf::load::Loader;
-use monitor::usage::message as ebpf_message;
 use std::ptr;
 use std::thread;
 use std::net::{TcpStream,TcpListener};
@@ -33,8 +33,6 @@ use std::io;
 use tokio::runtime;
 use tokio::runtime::Handle;
 use roxmltree::Document;
-use capnp::message::{Builder, HeapAllocator};
-use crate::messages_capnp::message;
 
 
 pub struct EmulationCore{
@@ -417,8 +415,8 @@ impl EmulationCore{
         let active_paths_len = active_paths.len().clone();
         if active_paths_len > 0{
 
-            let mut message: Builder<HeapAllocator> = capnp::message::Builder::new_default();
-            let mut msg: message::Builder<'_> = message.init_root::<message::Builder>();
+            let mut message: Builder<HeapAllocator> = Builder::new_default();
+            let mut msg: message_capnp::message::Builder<'_> = message.init_root::<message_capnp::message::Builder>();
 
             self.comms.lock().unwrap().init_message(msg.reborrow(), self.state.lock().unwrap().ec_cycle.clone() as u32, active_paths_len as u32);
 
@@ -456,44 +454,17 @@ impl EmulationCore{
 }
 
 
-//Retrivies local_usage from socket filter EBPF
-async fn get_local_usage(usages:Arc<Mutex<HashMap<u32,u32>>>){
-    //network device in the network space of the container
+/// Insert received message data from monitor's eBPF PerfEventMap into `usages`
+async fn get_local_usage(usages: Arc<Mutex<HashMap<u32,u32>>>) {
     let iface = "eth0";
-    let mut raw_fds = Vec::new();
+    tokio::task::spawn(async move {
+        let mut ebpf_handle = monitor::run(iface).await.unwrap();
 
-    let mut loaded = Loader::load(probe_code()).expect("error loading BPF program");
-    //insert socket filter
-    for sf in loaded.socket_filters_mut() {
-        if let Ok(sock_raw_fd) = sf.attach_socket_filter(iface) {
-            raw_fds.push(sock_raw_fd);
+        while let Some(msg) = ebpf_handle.rx.recv().await {
+            usages.lock().unwrap().insert(msg.dst, msg.bytes);
         }
-    }
-    //Read from the map how many bytes we sent other hosts
-    while let Some((name, events)) = loaded.events.next().await {
-        match name.as_str() {
-            "perf_events" => {
-                for event in events {
-                    let message = unsafe { ptr::read(event.as_ptr() as *const ebpf_message) }; 
-                        usages.lock().unwrap().insert(message.dst,message.bytes);
-                        //println!("Read from kernel {} {}",message.dst,message.bytes);
-                }
-            }
-            _ => {}
-        }
-    }
-
-
+    });
 }
-
-
-//retrieve .elf file
-fn probe_code() -> &'static [u8] {
-    include_bytes!(concat!(
-        "usage.elf"
-    ))
-}
-
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

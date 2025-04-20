@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
 mod state;
 mod graph;
 mod elements;
@@ -24,14 +23,10 @@ mod eventscheduler;
 mod docker;
 mod emulationcore;
 mod communication;
+
 use crate::emulationcore::EmulationCore;
 
-
-pub mod messages_capnp {
-    include!(concat!(env!("OUT_DIR"), "/src/messages_capnp.rs"));
-}
-
-
+use std::env;
 use tokio::runtime;
 
 

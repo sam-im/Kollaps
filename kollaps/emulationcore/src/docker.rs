@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::OnceLock;
+
 use docker_api::Exec;
 //use docker_api::ExecContainerOpts;
 use futures::StreamExt;
@@ -21,26 +23,26 @@ use subprocess::Popen;
 use subprocess::Redirection;
 use docker_api::opts::ExecCreateOpts;
 
-static mut COMMAND_STRING:Option<String> = None;
+static COMMAND_STRING: OnceLock<String> = OnceLock::new();
 
 
 pub async fn start_experiment(id:String){
-
     get_command_string(id.clone()).await;
-    let docker = docker_api::Docker::unix("/var/run/docker.sock");
 
+    let docker = docker_api::Docker::unix("/var/run/docker.sock");
     let container = docker.containers().get(id);
 
     let command_string;
-    unsafe{
-        if COMMAND_STRING.as_ref().is_none() || COMMAND_STRING.as_ref().unwrap().is_empty(){
-            println!("Leaving start experiment nothing to do");
-            return
-        }
-        command_string= COMMAND_STRING.as_ref().unwrap().clone().
-        as_mut_str().replace('"',"\"").as_mut_str().replace("'","\\'");
+    if COMMAND_STRING.get().map_or_else(|| true, |s| s.is_empty()) {
+        println!("Leaving start experiment nothing to do");
+        return;
+    } else {
+        command_string = COMMAND_STRING
+            .get()
+            .unwrap()
+            .replace('"', "\"")
+            .replace("'", "\\'");
     }
-
 
     let mut args = vec![];
 
@@ -122,10 +124,7 @@ pub async fn get_command_string(id:String){
         Err(e) => eprintln!("Error in command_string: {}", e),
     };
 
-    unsafe{
-        COMMAND_STRING = Some(command_string.clone());
-    }
-
+    COMMAND_STRING.get_or_init(|| command_string);
 }
 
 //Kill every process in the namespace of the container

@@ -139,7 +139,7 @@ impl Graph {
 
             let mut rng = rand::thread_rng();
             while self.bridges.contains_key(&ip_gen){
-                ip_gen = rng.gen();
+                ip_gen = rng.r#gen();  // the `gen` keyword is reserved in rust 2024
             }
 
             bridge.ip = ip_gen;
@@ -540,7 +540,7 @@ impl Graph {
                     socket_addr:SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 11).into()), 53),
                     protocol: trust_dns_resolver::config::Protocol::Tcp,
                     tls_dns_name:None,
-                    trust_nx_responses:true,
+                    trust_negative_responses:true,
                     bind_addr:None
                     
         
@@ -561,7 +561,7 @@ impl Graph {
                     Ok(response) =>{
                         for address in response.iter(){
                             println!("Address is {}",address);
-                            ips.push(address.clone());
+                            ips.push(*address.clone());
                         }
 
                     },
