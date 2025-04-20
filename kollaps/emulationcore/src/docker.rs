@@ -15,16 +15,13 @@
 
 use std::sync::OnceLock;
 
+use docker_api::opts::{ExecStartOpts, ExecCreateOpts};
 use docker_api::Exec;
-//use docker_api::ExecContainerOpts;
-use futures::StreamExt;
 use subprocess::PopenConfig;
 use subprocess::Popen;
 use subprocess::Redirection;
-use docker_api::opts::ExecCreateOpts;
 
 static COMMAND_STRING: OnceLock<String> = OnceLock::new();
-
 
 pub async fn start_experiment(id:String){
     get_command_string(id.clone()).await;
@@ -50,7 +47,6 @@ pub async fn start_experiment(id:String){
     args.push("-c");
  
     args.push(&command_string);
-    
 
     // Create Opts with specified command
     let opts = ExecCreateOpts::builder()
@@ -59,15 +55,14 @@ pub async fn start_experiment(id:String){
         .attach_stderr(true)
         .build();
 
-    let exec = Exec::create(docker, &container.id(), &opts).await;
+    let exec = Exec::create(docker, &container.id(), &opts).await.unwrap();
 
-
-    exec.as_ref().unwrap().start().next().await;
-
-
+    exec.start(&ExecStartOpts::builder().detach(false).build())
+        .await
+        .unwrap();
     //println!("{:#?}", exec.as_ref().unwrap().inspect().await);
-
 }
+
 //Retrieve the command to run
 pub async fn get_command_string(id:String){
     let docker = docker_api::Docker::unix("/var/run/docker.sock");
