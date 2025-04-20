@@ -9,7 +9,7 @@ members = [
     "monitor-ebpf"
 ]
 
-# do not add monitor-ebpf to default-members or else (spoiler: it won't compile)
+# do not add monitor-ebpf to default-members or else (it won't compile)
 default-members = [
     "monitor",
     "monitor-common",
@@ -18,7 +18,17 @@ default-members = [
     "capnp-schemas"
 ]
 
-# included by aya-rs, the ebpf library, project template
+# included by aya-rs project template
 [profile.release.package.monitor-ebpf]
 debug = 2
 codegen-units = 1
+
+# TODO
+# - Write docs for required packages to compile the rust side
+#   As of writing this, they are:
+#   - bpftool: required by aya-rs (in crates named monitor*), install from your distribution, e.g. for Arch it's: `pacman -Sy bpf`
+#   - bpf-linker: required by aya-rs, install from cargo with: `cargo install bpf-linker`
+#   - rust nightly toolchain: required by aya-rs, install using rustup: `rustup toolchain install nightly --component rust-src`
+#   - capnproto: required by capnp, install from your distribution, e.g. for Arch it's: `pacman -Sy capnproto`
+#
+# - Use the new eBPF and capnproto crates inside emulationcore (currently it's non functioning)
