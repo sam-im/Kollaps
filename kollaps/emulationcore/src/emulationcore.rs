@@ -28,7 +28,6 @@ use subprocess::Popen;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::io::Read;
-use futures::StreamExt;
 use std::io;
 use tokio::runtime;
 use tokio::runtime::Handle;
