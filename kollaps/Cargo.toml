@@ -1,8 +1,24 @@
 [workspace]
-resolver = "3"
+resolver = "2"
 members = [
     "communicationcore",
     "communicationmanager",
     "capnp-schemas",
-    "ebpf-xtask"
+    "monitor",
+    "monitor-common",
+    "monitor-ebpf"
 ]
+
+# do not add monitor-ebpf to default-members or else (spoiler: it won't compile)
+default-members = [
+    "monitor",
+    "monitor-common",
+    "communicationcore",
+    "communicationmanager",
+    "capnp-schemas"
+]
+
+# included by aya-rs, the ebpf library, project template
+[profile.release.package.monitor-ebpf]
+debug = 2
+codegen-units = 1
