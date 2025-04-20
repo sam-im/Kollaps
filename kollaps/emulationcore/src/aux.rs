@@ -20,8 +20,6 @@ use std::sync::{Arc, Mutex};
 use std::process;
 use std::thread;
 use std::time;
-use pnet::datalink;
-use ipnetwork::IpNetwork;
 use subprocess::PopenConfig;
 use subprocess::Popen;
 use subprocess::Redirection;
@@ -33,38 +31,32 @@ pub fn convert_to_int(octets:[u8;4]) -> u32{
     return ((octets[0] as u32) <<24)+((octets[1] as u32) <<16)+((octets[2] as u32) <<8)+octets[3] as u32 
 }
 
-pub fn get_own_ip(networkdevice:Option<String>) -> u32{
+pub fn get_own_ip(networkdevice: Option<String>) -> u32 {
+    use pnet::{datalink, ipnetwork};
 
-    if networkdevice.is_none(){
-        for iface in datalink::interfaces() {
-            if iface.name == "eth0"{
-                let ip = iface.ips[0];
-                match ip{
-                    IpNetwork::V4(ipv4)=>{
-                        return convert_to_int(ipv4.ip().octets());
-                    },
-                    IpNetwork::V6(_ipv6) => return 0,
-                }
-            }
+    let interface_name = match networkdevice {
+        Some(iface) => iface,
+        None => "eth0".to_string(),
+    };
+    let interfaces = datalink::interfaces();
+    let interface = interfaces
+        .into_iter()
+        .find(|iface| iface.name == interface_name);
+
+    if interface.is_none() { return 0; }
+    let addr = interface.unwrap().ips.iter().find_map(|ip| {
+        if let ipnetwork::IpNetwork::V4(ipv4) = ip {
+            Some(ipv4.ip())
+        } else {
+            None
         }
-        return 0;
-    }
-    else{
-        for iface in datalink::interfaces() {
-            if iface.name == networkdevice.as_ref().unwrap().to_string(){
-                let ip = iface.ips[0];
-                match ip{
-                    IpNetwork::V4(ipv4)=>{
-                        return convert_to_int(ipv4.ip().octets());
-                    },
-                    IpNetwork::V6(_ipv6) => return 0,
-                }
-            }
-        }
-        return 0;
+    });
+
+    match addr {
+        Some(ipv4) => convert_to_int(ipv4.octets()),
+        None => 0,
     }
 }
-
 
 pub fn print_message(name:String,message_to_print:String){
     let message;
