@@ -137,9 +137,9 @@ impl Graph {
             //generate random IP to put be able to put bridges in the map
             let mut ip_gen:u32 = 0;
 
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             while self.bridges.contains_key(&ip_gen){
-                ip_gen = rng.r#gen();  // the `gen` keyword is reserved in rust 2024
+                ip_gen = rng.random();
             }
 
             bridge.ip = ip_gen;
