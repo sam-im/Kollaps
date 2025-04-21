@@ -18,10 +18,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time;
 use crate::elements::{Service,Link,Path,Flowu16};
-use trust_dns_resolver::Resolver;
-use trust_dns_resolver::config::*;
-use std::env;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use crate::aux::{convert_to_int, get_own_ip, print_message, Dijkstraentry};
 use rand::Rng;
 use std::f32::INFINITY;
@@ -525,71 +521,100 @@ impl Graph {
     }
 
     //get ips of containers
-    pub fn resolve_hostnames_docker(&mut self){
+    pub fn resolve_hostnames_docker(&mut self) {
+        use std::{
+            str::FromStr,
+            net::{IpAddr, Ipv4Addr, SocketAddr},
+            env,
+        };
+        use tokio::runtime::Runtime;
+        use hickory_client::client::{
+            Client,
+            ClientHandle
+        };
+        use hickory_client::proto::{
+            rr::{DNSClass, Name, RecordType},
+            runtime::TokioRuntimeProvider,
+            tcp::TcpClientStream,
+        };
 
+        let sleeptime = time::Duration::from_millis(500);
+        let rt = Runtime::new().expect("failed to build tokio runtime");
+        let (stream, sender) = TcpClientStream::new(
+            SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 11)),
+                53,
+            ),
+            None,
+            None,
+            TokioRuntimeProvider::new()
+        );
+        let client = Client::new(stream, sender, None);
 
-        for (name,services) in self.services_by_name.iter_mut(){            
-            let mut ips:Vec<Ipv4Addr>;
+        let (mut client, bg) = rt.block_on(async {
+            client.await.expect("connection failed")
+        });
+        rt.spawn(bg);
+
+        for (name, services) in self.services_by_name.iter_mut() {
+            let mut ips: Vec<Ipv4Addr>;
             loop{
+                ips = vec![];
 
-                let sleeptime = time::Duration::from_millis(500);
-
-                let mut resolverconfig = ResolverConfig::new();
-        
-                resolverconfig.add_name_server(NameServerConfig{
-                    socket_addr:SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 11).into()), 53),
-                    protocol: trust_dns_resolver::config::Protocol::Tcp,
-                    tls_dns_name:None,
-                    trust_negative_responses:true,
-                    bind_addr:None
-                    
-        
-                });
-                
-                let resolver = Resolver::new(resolverconfig, ResolverOpts::default()).unwrap();
-        
                 let key = "KOLLAPS_UUID";
                 let uuid = match env::var(key) {
                     Ok(val) => Some(val),
                     Err(_e) => None,
                 };
-                
 
-                ips = vec![];
-                let response = resolver.ipv4_lookup(format!("{}-{}",name,uuid.as_ref().unwrap()));
-                match response{
-                    Ok(response) =>{
-                        for address in response.iter(){
-                            println!("Address is {}",address);
-                            ips.push(*address.clone());
-                        }
+                let query = client.query(
+                    Name::from_str(format!("{}-{}", name, uuid.unwrap()).as_str()).unwrap(),
+                    DNSClass::IN,
+                    RecordType::A,
+                );
 
+                let response = rt.block_on(async {
+                    query.await
+                });
+
+                match response {
+                    Ok(res) => {
+                        res.answers()
+                           .iter()
+                           .map(|res| res.data().ip_addr())
+                           .filter_map(|ip| {
+                               if let Some(IpAddr::V4(ipv4)) = ip {
+                                   println!("Address is {}", ipv4);
+                                   Some(ipv4)
+                               } else { None }
+                           })
+                           .for_each(|ipv4| ips.push(ipv4));
                     },
-                    Err(_e) => {
-                        println!("Error: {}",_e);
+                    Err(e) => {
+                        println!("Error: {}",e);
                         thread::sleep(sleeptime);
                     }
                 };
-                println!("IPS len is {} and services len is {} for name {}",ips.len(),services.len(),name.clone());
+                println!("IPS len is {} and services len is {} for name {}",
+                         ips.len(),
+                         services.len(),
+                         name.clone());
+
                 if ips.len() == services.len(){
                     break;
                 }
                 thread::sleep(sleeptime);
-    
             }
             ips.sort();
 
-            for (i,service) in services.iter().enumerate(){
+            for (i, service) in services.iter().enumerate() {
                 let int_ip = convert_to_int(ips[i].octets());
                 service.lock().unwrap().ip = int_ip;
                 service.lock().unwrap().replica_id = i;
-                self.services.insert(int_ip,Arc::clone(service));
+                self.services.insert(int_ip, Arc::clone(service));
                 self.ips.push(int_ip);
             }
         }
-
-
-        
     }
 
     pub fn set_graph_root(&mut self){
