@@ -777,7 +777,7 @@ impl XMLGraphParser{
 
                         loop{
 
-                            id = rng.gen_range(0..root.lock().unwrap().replicas) as usize;
+                            id = rng.random_range(0..root.lock().unwrap().replicas) as usize;
 
                             available = !replicas[id][joined];
 
@@ -817,7 +817,7 @@ impl XMLGraphParser{
 
                         loop{
 
-                            id = rng.gen_range(0..root.lock().unwrap().replicas) as usize;
+                            id = rng.random_range(0..root.lock().unwrap().replicas) as usize;
 
                             up = replicas[id][joined];
 
@@ -860,7 +860,7 @@ impl XMLGraphParser{
 
                         loop{
 
-                            id = rng.gen_range(0..root.lock().unwrap().replicas) as usize;
+                            id = rng.random_range(0..root.lock().unwrap().replicas) as usize;
 
                             disconnected_bool = replicas[id][disconnected];
 
@@ -886,7 +886,7 @@ impl XMLGraphParser{
 
                         loop{
 
-                            id = rng.gen_range(0..root.lock().unwrap().replicas) as usize;
+                            id = rng.random_range(0..root.lock().unwrap().replicas) as usize;
 
                             connected = replicas[id][joined] && !(replicas[id][disconnected]);
 

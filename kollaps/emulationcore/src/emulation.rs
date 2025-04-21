@@ -37,7 +37,7 @@ impl Emulation{
     pub fn init(&mut self,ip:u32){
         unsafe{
             let udp_port = 7073;
-            let tcinit: Symbol<unsafe extern fn (u32,u32,u32)> = self.library.get(b"init").unwrap();
+            let tcinit: Symbol<unsafe extern "C" fn (u32,u32,u32)> = self.library.get(b"init").unwrap();
             tcinit(udp_port,1000,ip);
         }
 
@@ -50,7 +50,7 @@ impl Emulation{
         }
         unsafe{
 
-            let initdestination: Symbol< unsafe extern fn(u32,u32,f32,f32,f32)> = self.library.get(b"initDestination").unwrap();
+            let initdestination: Symbol< unsafe extern "C" fn(u32,u32,f32,f32,f32)> = self.library.get(b"initDestination").unwrap();
 
             initdestination(destinationip,bandwidth,latency,jitter,drop);
         }
@@ -60,7 +60,7 @@ impl Emulation{
     pub fn disable_path(&mut self, destinationip:u32){
         unsafe{
             
-            let initdestination: Symbol< unsafe extern fn(u32,u32,f32,f32,f32)> = self.library.get(b"initDestination").unwrap();
+            let initdestination: Symbol< unsafe extern "C" fn(u32,u32,f32,f32,f32)> = self.library.get(b"initDestination").unwrap();
             initdestination(destinationip,10000,1.0,0.0,1.0);
         }
 
@@ -74,14 +74,14 @@ impl Emulation{
             //print_and_fail("Tried to change bandwidth to 0".to_string());
             print_message(self.name.clone(),"Tried changing to 0".to_string());
             unsafe{
-                let changebw: Symbol< unsafe extern fn(u32,u32)> = self.library.get(b"changeBandwidth").unwrap();
+                let changebw: Symbol< unsafe extern "C" fn(u32,u32)> = self.library.get(b"changeBandwidth").unwrap();
                 changebw(ip,1);
                 //print_message(self.name.clone(),"Changed to 1".to_string());
             }
         }
         else{
             unsafe{
-                let changebw: Symbol< unsafe extern fn(u32,u32)> = self.library.get(b"changeBandwidth").unwrap();
+                let changebw: Symbol< unsafe extern "C" fn(u32,u32)> = self.library.get(b"changeBandwidth").unwrap();
                 //print_message(self.name.clone(),format!("Changing bw to {}",bandwidth/1000).to_string());
                 changebw(ip,bw_in_kbps);
             }
@@ -99,14 +99,14 @@ impl Emulation{
 
     pub fn change_latency(&mut self, ip:u32,latency:f32,jitter:f32){
         unsafe{
-            let changelatency: Symbol< unsafe extern fn(u32,f32,f32)> = self.library.get(b"changeLatency").unwrap();
+            let changelatency: Symbol< unsafe extern "C" fn(u32,f32,f32)> = self.library.get(b"changeLatency").unwrap();
             changelatency(ip,latency,jitter);
         }
     }
 
     pub fn disconnect(&mut self){
         unsafe{
-            let disconnect:Symbol<unsafe extern fn ()> = self.library.get(b"disconnect").unwrap();
+            let disconnect:Symbol<unsafe extern "C" fn ()> = self.library.get(b"disconnect").unwrap();
             disconnect();
         }
     }
@@ -114,14 +114,14 @@ impl Emulation{
 
     pub fn reconnect(&mut self){
         unsafe{
-            let reconnect:Symbol<unsafe extern fn ()> = self.library.get(b"reconnect").unwrap();
+            let reconnect:Symbol<unsafe extern "C" fn ()> = self.library.get(b"reconnect").unwrap();
             reconnect();
         }
     }
 
     pub fn tear_down(&mut self){
         unsafe{
-            let teardown:Symbol<unsafe extern fn (u32)> = self.library.get(b"tearDown").unwrap();
+            let teardown:Symbol<unsafe extern "C" fn (u32)> = self.library.get(b"tearDown").unwrap();
             teardown(0);
         }
     }
