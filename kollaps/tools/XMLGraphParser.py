@@ -15,11 +15,10 @@
 # limitations under the License.
 #
 import xml.etree.ElementTree as ET
-from random import choice, randint, seed, randrange
+from random import choice, randint
 from string import ascii_letters
 
-from kollaps.Kollapslib.utils import print_and_fail, print_identified, print_message
-from kollaps.Kollapslib.NetGraph import NetGraph
+from kollaps.tools.utils import print_and_fail
 
 import sys
 if sys.version_info >= (3, 0):

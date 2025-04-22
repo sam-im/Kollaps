@@ -25,11 +25,11 @@ from subprocess import Popen
 from multiprocessing import Process
 from time import sleep
 
-from kollaps.common.utils import int2ip, ip2int
-from kollaps.common.utils import print_error, print_and_fail, print_named, print_error_named
-from kollaps.common.utils import LOCAL_IPS_FILE, REMOTE_IPS_FILE, GOD_IPS_SHARE_PORT
-from kollaps.common.bootstrapping.SwarmBootstrapper import SwarmBootstrapper
-from kollaps.common.bootstrapping.KubernetesBootstrapper import KubernetesBootstrapper
+from kollaps.tools.utils import int2ip, ip2int
+from kollaps.tools.utils import print_error, print_and_fail, print_named, print_error_named
+from kollaps.tools.utils import LOCAL_IPS_FILE, REMOTE_IPS_FILE, GOD_IPS_SHARE_PORT
+from kollaps.tools.bootstrapping.SwarmBootstrapper import SwarmBootstrapper
+from kollaps.tools.bootstrapping.KubernetesBootstrapper import KubernetesBootstrapper
 
 
 class Bootstrapper(object):

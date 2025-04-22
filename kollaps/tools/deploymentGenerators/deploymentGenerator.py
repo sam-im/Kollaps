@@ -18,10 +18,10 @@
 import sys
 import os
 
-from NetGraph import NetGraph
-from XMLGraphParser import XMLGraphParser
-from deploymentGenerators.DockerComposeFileGenerator import DockerComposeFileGenerator
-from deploymentGenerators.KubernetesManifestGenerator import KubernetesManifestGenerator
+from kollaps.tools.NetGraph import NetGraph
+from kollaps.tools.XMLGraphParser import XMLGraphParser
+from kollaps.tools.deploymentGenerators.DockerComposeFileGenerator import DockerComposeFileGenerator
+from kollaps.tools.deploymentGenerators.KubernetesManifestGenerator import KubernetesManifestGenerator
 from utils import SHORT_LIMIT
 from utils import print_and_fail
 

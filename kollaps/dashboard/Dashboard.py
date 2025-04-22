@@ -23,10 +23,10 @@ from kubernetes import client, config
 from openssh_wrapper import SSHConnection
 from flask import Flask, render_template, request, redirect, url_for
 
-from kollaps.common.NetGraph import NetGraph
-from kollaps.common.XMLGraphParser import XMLGraphParser
-from kollaps.common.utils import int2ip, ip2int, setup_container, CONTAINER
-from kollaps.common.utils import print_message, print_error, print_named
+from kollaps.tools.NetGraph import NetGraph
+from kollaps.tools.XMLGraphParser import XMLGraphParser
+from kollaps.tools.utils import int2ip, ip2int, setup_container, CONTAINER
+from kollaps.tools.utils import print_message, print_error, print_named
 
 import dns.resolver
 import libcommunicationcore

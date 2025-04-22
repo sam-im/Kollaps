@@ -19,8 +19,7 @@ import os
 from kubernetes import client, config
 from uuid import uuid4
 
-from kollaps.Kollapslib.NetGraph import NetGraph
-from kollaps.Kollapslib.utils import print_and_fail, print_error_named, print_message, print_named
+from kollaps.tools.utils import print_and_fail
 
 
 class KubernetesManifestGenerator:

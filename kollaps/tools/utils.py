@@ -14,14 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import subprocess
 import sys
 import struct
 import string
 import random
 import socket
 import docker
-import os
 from subprocess import Popen
 from time import sleep
 

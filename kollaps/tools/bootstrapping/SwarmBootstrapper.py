@@ -27,11 +27,11 @@ from subprocess import Popen
 from time import sleep
 from signal import pause
 
-from kollaps.Kollapslib.bootstrapping.Bootstrapper import Bootstrapper
-from kollaps.Kollapslib.utils import print_message, print_error, print_and_fail, print_named, print_error_named
-from kollaps.Kollapslib.utils import DOCKER_SOCK, TOPOLOGY
-from kollaps.Kollapslib.NetGraph import NetGraph
-from kollaps.Kollapslib.XMLGraphParser import XMLGraphParser
+from kollaps.tools.bootstrapping.Bootstrapper import Bootstrapper
+from kollaps.tools.utils import print_message, print_error, print_named, print_error_named
+from kollaps.tools.utils import DOCKER_SOCK, TOPOLOGY
+from kollaps.tools.NetGraph import NetGraph
+from kollaps.tools.XMLGraphParser import XMLGraphParser
 
 
 class SwarmBootstrapper(Bootstrapper):

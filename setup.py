@@ -8,31 +8,36 @@ setup(name='kollaps',
       author='Joao Neves, Paulo Gouveia, Luca Liechti',
       packages=[
           'kollaps',
-          'kollaps.Kollapslib.deploymentGenerators',
-          'kollaps.Kollapslib.bootstrapping',
-          'kollaps.Kollapslib.ThunderStorm',
-          'kollaps.Kollapslib',
-          'kollaps.TCAL'
+          'kollaps.TCAL',
+          'kollaps.tools',
+          'kollaps.tools.deploymentGenerators',
+          'kollaps.tools.bootstrapping',
+          'kollaps.tools.ThunderStorm',
       ],
       install_requires=[
           'dnspython',
           'docker',
-          'kubernetes',
+          'kubernetes',  # why is this required
           'netifaces',
           'ply'
       ],
       include_package_data=True,
       package_data={
           'kollaps.TCAL': ['libTCAL.so'],
-          'kollaps': ['static/css/*', 'static/js/*',  'templates/*.html'],
+          'kollaps.dashboard': [
+              'static/css/*', 
+              'static/js/*',  
+              'templates/*.html'
+          ],
       },
       entry_points={
-          'console_scripts': ['KollapsDeploymentGenerator=kollaps.deploymentGenerator:main',
-                              'KollapsDashboard=kollaps.Dashboard:main',
-                              'KollapsLogger=kollaps.Logger:main',
-                              'KollapsEmulationManager=kollaps.EmulationManager:main',
-                              'Kollapsbootstrapper=kollaps.bootstrapper:main',
-                              'ThunderstormTranslator=kollaps.ThunderstormTranslator:main'],
+          'console_scripts': [
+              'KollapsDeploymentGenerator = kollaps.deploymentGenerators.deploymentGenerator:main',
+              'KollapsDashboard=kollaps.dashboard.Dashboard:main',
+              # 'KollapsLogger=kollaps.Logger:main',  # doesn't exist
+              # 'KollapsEmulationManager=kollaps.EmulationManager:main',  # doesn't exist
+              'Kollapsbootstrapper=kollaps.tools.bootstrapping.Bootstrapper:main',
+              'ThunderstormTranslator=kollaps.tools.Thunderstorm.ThunderstormTranslator:main'],
       },
       zip_safe=False)
       

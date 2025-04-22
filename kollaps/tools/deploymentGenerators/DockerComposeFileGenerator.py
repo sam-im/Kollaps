@@ -19,9 +19,8 @@ import os
 
 from uuid import uuid4
 
-from kollaps.Kollapslib.NetGraph import NetGraph
-from kollaps.Kollapslib.utils import DOCKER_SOCK, print_error_named, print_and_fail
-from kollaps.Kollapslib.XMLGraphParser import XMLGraphParser
+from kollaps.tools.utils import DOCKER_SOCK, print_error_named, print_and_fail
+from kollaps.tools.XMLGraphParser import XMLGraphParser
 
 large_xml_file = True
 

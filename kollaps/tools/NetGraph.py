@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 from kubernetes import client, config
-from time import sleep, time
+from time import sleep
 from math import sqrt
 from os import environ
 from threading import Lock
@@ -23,7 +23,7 @@ import re
 import os
 import dns.resolver
 
-from kollaps.Kollapslib.utils import print_and_fail, ip2int,ip2intbig
+from kollaps.tools.utils import print_and_fail, ip2int,ip2intbig
 
 import sys
 if sys.version_info >= (3, 0):

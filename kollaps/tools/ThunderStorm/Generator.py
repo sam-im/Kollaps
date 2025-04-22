@@ -15,14 +15,13 @@
 # limitations under the License.
 #
 import sys
-import ast
 import random
 import datetime
 import socket
 import struct
 from xml.etree import ElementTree as ET
 from xml.dom import minidom
-from kollaps.Kollapslib.ThunderStorm.Parser import BootstrapperDeclaration, NodeDeclaration, BridgeDeclaration, LinkDeclaration, EventDeclaration,BaremetalNodeAuxDeclaration
+from kollaps.tools.ThunderStorm.Parser import BootstrapperDeclaration, NodeDeclaration, BridgeDeclaration, LinkDeclaration, EventDeclaration,BaremetalNodeAuxDeclaration
 
 if sys.version_info >= (3, 0):
     from typing import Dict, List, Tuple
