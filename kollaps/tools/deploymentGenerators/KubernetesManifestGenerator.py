@@ -58,7 +58,7 @@ class KubernetesManifestGenerator:
         print("  name: listpods")
         print("  apiGroup: rbac.authorization.k8s.io")
         
-    def print_bootstrapper(self, number_of_gods, pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation):
+    def print_bootstrapper(self, number_of_gods, pool_period, max_flow_age, shm_size, bw_emulation):
         print("apiVersion: apps/v1")
         print("kind: DaemonSet")
         print("metadata:")
@@ -237,7 +237,7 @@ class KubernetesManifestGenerator:
         print("data:")
         print("  topology.xml: \"" + topo.replace("\n", "\\n").replace("\t", "\\t").replace("\"", "\\\"") + "\"")
 
-    def generate(self, pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation=True):
+    def generate(self, pool_period, max_flow_age, shm_size, bw_emulation=True):
         number_of_gods = 0
         try:
             if os.getenv('KUBERNETES_SERVICE_HOST'):
@@ -253,7 +253,7 @@ class KubernetesManifestGenerator:
         
         self.print_roles()
         print("---")
-        self.print_bootstrapper(number_of_gods, pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation)
+        self.print_bootstrapper(number_of_gods, pool_period, max_flow_age, shm_size, bw_emulation)
         print("---")
         for service in self.graph.services:
             self.print_service(self.graph.services[service])

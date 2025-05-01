@@ -22,8 +22,9 @@ from kollaps.tools.NetGraph import NetGraph
 from kollaps.tools.XMLGraphParser import XMLGraphParser
 from kollaps.tools.deploymentGenerators.DockerComposeFileGenerator import DockerComposeFileGenerator
 from kollaps.tools.deploymentGenerators.KubernetesManifestGenerator import KubernetesManifestGenerator
-from utils import SHORT_LIMIT
-from utils import print_and_fail
+from kollaps.tools.utils import SHORT_LIMIT
+from kollaps.tools.utils import print_and_fail
+
 
 
 def main():
@@ -36,14 +37,6 @@ def main():
         
     
     shm_size = 8000000000
-    aeron_lib_path = "/home/daedalus/Documents/aeron4need/cppbuild/Release/lib/libaeronlib.so"
-    aeron_term_buffer_length = 64*1024*1024           # must be multiple of 64*1024
-    aeron_ipc_term_buffer_length = 64*1024*1024   	# must be multiple of 64*1024
-
-    threading_mode = 'SHARED'             # aeron uses 1 thread
-    # threading_mode = 'SHARED_NETWORK'   # aeron uses 2 threads
-    # threading_mode = 'DEDICATED'        # aeron uses 3 threads
-
     pool_period = 0.05
     max_flow_age = 2
     
@@ -90,7 +83,7 @@ def main():
         pass
     
     if generator is not None:
-        generator.generate(pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation)
+        generator.generate(pool_period, max_flow_age, shm_size, bw_emulation)
         output += "Experiment UUID: " + generator.experiment_UUID
         print(output, file=sys.stderr)
         

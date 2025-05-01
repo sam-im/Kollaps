@@ -37,7 +37,7 @@ class DockerComposeFileGenerator:
 		print("services:")
 		
 		
-	def print_bootstrapper(self, number_of_gods, pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation):
+	def print_bootstrapper(self, number_of_gods, pool_period, max_flow_age, shm_size, bw_emulation):
 		print("  bootstrapper:")
 		print("    image: " + self.graph.bootstrapper)
 		print("    command: [\"-s\", \"" + self.experiment_UUID + "\"]")
@@ -134,7 +134,7 @@ class DockerComposeFileGenerator:
 		print("")
 
 
-	def generate(self, pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation=True):
+	def generate(self, pool_period, max_flow_age, shm_size, bw_emulation=True):
 		number_of_gods = 0
 		XMLGraphParser(self.topology_file, self.graph,"container")
 		
@@ -148,7 +148,7 @@ class DockerComposeFileGenerator:
 			print_and_fail(e)
 		
 		self.print_header()
-		self.print_bootstrapper(number_of_gods, pool_period, max_flow_age, threading_mode, shm_size, aeron_lib_path, aeron_term_buffer_length, aeron_ipc_term_buffer_length, bw_emulation)
+		self.print_bootstrapper(number_of_gods, pool_period, max_flow_age, shm_size, bw_emulation)
 		for service in self.graph.services:
 			self.print_service(self.graph.services[service])
 		self.print_configs()

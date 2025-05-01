@@ -33,9 +33,6 @@ TOPOLOGY = "/topology.xml"
 LOCAL_IPS_FILE = "/local_ips.txt"
 REMOTE_IPS_FILE = "/remote_ips.txt"
 
-# PG this path is because aeron is compiled with cmake and it uses relative paths
-AERON_LIB_PATH = "/home/daedalus/Documents/aeron4need/cppbuild/Release/lib/libaeronlib.so"
-
 GOD_IPS_SHARE_PORT = 55555
 
 

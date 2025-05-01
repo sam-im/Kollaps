@@ -28,8 +28,6 @@ from time import sleep
 from kollaps.tools.utils import int2ip, ip2int
 from kollaps.tools.utils import print_error, print_and_fail, print_named, print_error_named
 from kollaps.tools.utils import LOCAL_IPS_FILE, REMOTE_IPS_FILE, GOD_IPS_SHARE_PORT
-from kollaps.tools.bootstrapping.SwarmBootstrapper import SwarmBootstrapper
-from kollaps.tools.bootstrapping.KubernetesBootstrapper import KubernetesBootstrapper
 
 
 class Bootstrapper(object):
@@ -42,7 +40,6 @@ class Bootstrapper(object):
         
         self.gods = {}
         self.ready_gods = []
-        self.aeron_media_driver = None
         self.already_bootstrapped = {}
         self.instance_count = 0
         self.rust_handler = None
@@ -206,6 +203,12 @@ class Bootstrapper(object):
 
 
 def main():
+    # Initially the main() funciton was in a seperate file in the root of the src files
+    # I merged it with the Bootstrapper.py, this resulted in a "circular import error"
+    # to fix it, I moved the imports that causes it inside the main function
+    from kollaps.tools.bootstrapping.SwarmBootstrapper import SwarmBootstrapper
+    from kollaps.tools.bootstrapping.KubernetesBootstrapper import KubernetesBootstrapper
+
     try:
         if len(sys.argv) < 3:
             msg = "If you are calling " + sys.argv[0] + " from your workstation stop."
