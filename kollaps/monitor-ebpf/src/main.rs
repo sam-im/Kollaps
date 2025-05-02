@@ -15,7 +15,7 @@ use aya_ebpf::{
 use core::mem;
 
 // Map to hold perf_events
-#[map(name="test")]
+#[map(name="PERF_EVENT")]
 static PERF_EVENTS: PerfEventArray<Message> = PerfEventArray::new(0);
 
 // Map to accumulate bytes per dst IP
