@@ -15,7 +15,7 @@ use aya_ebpf::{
 use core::mem;
 
 // Map to hold perf_events
-#[map(name="PERF_EVENT")]
+#[map]
 static PERF_EVENTS: PerfEventArray<Message> = PerfEventArray::new(0);
 
 // Map to accumulate bytes per dst IP
@@ -43,40 +43,38 @@ fn try_measure_tcp_lifetime(ctx: XdpContext) -> Result<(), i64> {
     }
 
     let ipv4hdr: *const Ipv4Hdr = unsafe { ptr_at(&ctx, EthHdr::LEN)? };
-    let dst = SocketAddr::new(
-        u32::from_be_bytes(unsafe { (*ipv4hdr).dst_addr })
-    );
+    let dst = SocketAddr { addr: u32::from_be_bytes(unsafe { (*ipv4hdr).dst_addr }) };
     let len: u32 = (ctx.data_end() - ctx.data()) as u32;
 
     unsafe {
-        let now = bpf_ktime_get_ns();
+        let time = bpf_ktime_get_ns();
 
         match TIME.get(&dst.addr) {
             None => {
-                TIME.insert(&dst.addr, &now, 0)?;
+                TIME.insert(&dst.addr, &time, 0)?;
             },
-            Some(time) => {
-                if now - time > 5_000_000 {
-                    match USAGE.get(&dst.addr) {
-                        None => {
-                            USAGE.insert(&dst.addr, &len, 0)?;
-                        },
-                        Some(value) => {
-                            let new_len = value + len;
-                            USAGE.insert(&dst.addr, &new_len, 0)?;
+            Some(prev_time) => {
+                match USAGE.get(&dst.addr) {
+                    None => {
+                        USAGE.insert(&dst.addr, &len, 0)?;
+                    },
+                    Some(prev_len) => {
+                        let new_len = prev_len + len;
+
+                        if time - prev_time > 5_000_000 {
                             let msg = Message { dst: dst.addr, bytes: new_len };
                             PERF_EVENTS.output(&ctx, &msg, 0);
-                            TIME.insert(&dst.addr, &now, 0)?;
-                        }
-                    }
-                } else {
-                    match USAGE.get(&dst.addr) {
-                        None => {
-                            USAGE.insert(&dst.addr, &len, 0)?;
-                        },
-                        Some(value) => {
-                            let newvalue = value + len;
-                            USAGE.insert(&dst.addr, &newvalue, 0)?;
+                            // TODO consider changing accumulating bytes to
+                            // bytes since last send to the PERF_EVENTS and
+                            // reset it to zero. Currently there is a chance
+                            // that the USAGE value of u32 will overflow after
+                            // receiving 4GB of packets.
+                            // This will potentially require changes to the logic
+                            // in emulationcore as well.
+                            USAGE.insert(&dst.addr, &new_len, 0)?;
+                            TIME.insert(&dst.addr, &time, 0)?;
+                        } else {
+                            USAGE.insert(&dst.addr, &new_len, 0)?;
                         }
                     }
                 }

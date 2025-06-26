@@ -18,15 +18,16 @@
 
 mod error;
 
-use aya::Ebpf;
 use error::MonitorError;
+use monitor_common::Message;
 
 use aya::maps::AsyncPerfEventArray;
 use aya::programs::{Xdp, XdpFlags};
 use aya::util::online_cpus;
+use aya::Ebpf;
 use bytes::BytesMut;
-use monitor_common::Message;
 use std::mem::size_of;
+use std::ptr;
 use tokio::sync::mpsc;
 use tokio::task;
 
@@ -53,7 +54,7 @@ pub async fn run(iface: &str) -> Result<EbpfHandle, MonitorError> {
 
     // try to convert PerfEventArray to it's Async equivalent
     let mut perf_array =
-        AsyncPerfEventArray::try_from(ebpf.take_map("PERF_EVENT").ok_or(MonitorError::AyaNone)?)?;
+        AsyncPerfEventArray::try_from(ebpf.take_map("PERF_EVENTS").ok_or(MonitorError::AyaNone)?)?;
 
     let (tx, rx) = mpsc::channel::<Message>(512);
 
@@ -64,28 +65,46 @@ pub async fn run(iface: &str) -> Result<EbpfHandle, MonitorError> {
         let mut buf = perf_array.open(cpu_id, None)?;
 
         task::spawn(async move {
-            let mut buffers = (0..10)
+            let mut buffers = (0..64)
                 .map(|_| BytesMut::with_capacity(size_of::<Message>()))
                 .collect::<Vec<_>>();
 
             loop {
-                // wait for events
-                let events = buf.read_events(&mut buffers).await?;
+                match buf.read_events(&mut buffers).await {
+                    Ok(events) => {
+                        // events.read contains the number of events that have been read,
+                        // and is always <= buffers.len()
+                        for i in 0..events.read {
+                            let event_buf = &mut buffers[i];
 
-                // events.read contains the number of events that have been read,
-                // and is always <= buffers.len()
-                for i in 0..events.read {
-                    let buf = &mut buffers[i];
-                    let ptr = buf.as_ptr() as *const Message;
-                    let msg;
-                    // SAFETY:
-                    // - `buf` must be properly aligned for `Message`, which is ensured
-                    // because it is #[repr(C)] and contains two `u32`s.
-                    // - `buf` is a `BytesMut` with the size of `Message` and
-                    // should be properly initialized (check `monitor-ebps`).
-                    unsafe {
-                        msg = std::ptr::read(ptr);
-                        tx.send(msg).await?;
+                            // each event in the PERF_EVENTS has a Message struct
+                            // accompanied with a header of length 4
+                            if event_buf.len() != size_of::<Message>() + 4 {
+                                eprintln!(
+                                    "monitor: unexpected perf event size {} on CPU {} – skipping",
+                                    event_buf.len(),
+                                    cpu_id
+                                );
+                                event_buf.clear();
+                                continue;
+                            }
+
+                            let ptr = event_buf.as_ptr() as *const Message;
+                            let msg = unsafe { ptr::read_unaligned(ptr) };
+
+                            // println!("monitor: received event {:?}", msg);
+                            match tx.send(msg).await {
+                                Ok(_) => {
+                                    event_buf.clear();
+                                    continue;
+                                },
+                                Err(_) => break,  // only fails if rx is dropped
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("monitor: error reading perf buffer on CPU {}: {:?}", cpu_id, e);
+                        break;
                     }
                 }
             }
@@ -98,4 +117,3 @@ pub async fn run(iface: &str) -> Result<EbpfHandle, MonitorError> {
 
     Ok(EbpfHandle { ebpf, rx })
 }
-

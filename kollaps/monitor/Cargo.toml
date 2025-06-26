@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-monitor-common = { path = "../monitor-common" }
+monitor-common = { path = "../monitor-common", features = ["user"] }
 aya = { version = "0.13.1", default-features = false, features = [ "async_tokio" ] }
-libc = { version = "0.2.159", default-features = false }
 thiserror = "2.0.12"
 tokio = { version = "1.44.2", features = ["sync", "rt"] }
 bytes = "1.10.1"

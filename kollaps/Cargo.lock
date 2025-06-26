@@ -1796,7 +1796,6 @@ dependencies = [
  "aya",
  "aya-build",
  "bytes",
- "libc",
  "monitor-common",
  "monitor-ebpf",
  "thiserror 2.0.12",
