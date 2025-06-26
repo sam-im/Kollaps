@@ -24,104 +24,45 @@ use std::io::BufReader;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread;
 
-pub struct FdSet(libc::fd_set);
-
-//docker container id
-static CONTAINERID: OnceLock<String> = OnceLock::new();
-
-//docker container name
-static CONTAINERNAME: OnceLock<String> = OnceLock::new();
-
-//ip of container in int (smallendian)
-static CONTAINERIP: OnceLock<u32> = OnceLock::new();
-
-//limit of links in topology
-static CONTAINERLIMIT: OnceLock<u32> = OnceLock::new();
-
-//pipe to write to RM, pipe to read from RM, pipe to read local usage from RM
+// pipe to write to RM, pipe to read from RM, pipe to read local usage from RM
 struct Communication {
     writepipe: Option<File>,
     readpipe: Option<File>,
-    buf_reader: Option<BufReader<File>>,
+    _buf_reader: Option<BufReader<File>>,
 }
 
-//struct of messages to RM
-struct Message {
-    content: Vec<u8>,
-    index: usize,
-}
+// docker container id
+static CONTAINERID: OnceLock<String> = OnceLock::new();
 
-//init global
+// docker container name
+static CONTAINERNAME: OnceLock<String> = OnceLock::new();
+
+// ip of container in int (smallendian)
+static CONTAINERIP: OnceLock<u32> = OnceLock::new();
+
+// limit of links in topology
+static CONTAINERLIMIT: OnceLock<u32> = OnceLock::new();
+
+// init global
 static COMMUNICATION: LazyLock<Mutex<Communication>> = LazyLock::new(|| {
     Mutex::new(Communication {
         writepipe: None,
         readpipe: None,
-        buf_reader: None,
+        _buf_reader: None,
     })
 });
 
-//init message (always the same struct all function write to and read from this)
-static MESSAGE: LazyLock<Mutex<Message>> = LazyLock::new(|| {
-    Mutex::new(Message {
-        content: Vec::new(),
-        index: 0, //where the to start writing information to
-    })
-});
-
-//python reference
+// python reference
 static COMMUNICATIONMANAGER: OnceLock<PyObject> = OnceLock::new();
 
-//python module definitions
+// python module definitions
 #[pymodule]
 fn libcommunicationcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(start))?;
     m.add_wrapped(wrap_pyfunction!(register_communicationmanager))?;
-    m.add_wrapped(wrap_pyfunction!(start_polling_u8))?;
     m.add_wrapped(wrap_pyfunction!(start_polling_u16))?;
 
     Ok(())
-}
-
-/**********************************************************************************************
-*       buffer and different sized ints
-**********************************************************************************************/
-
-fn put_uint16(index: usize, value: u32) {
-    let mut message = MESSAGE.lock().unwrap();
-    message.content[index] = ((value >> 0) & 0xff) as u8;
-    message.content[index + 1] = ((value >> 8) & 0xff) as u8;
-}
-
-/*fn put_uint32_in_buffer(value:u32) -> [u8;4]{
-
-    let mut buffer = [0;4];
-    buffer[0] = ((value >> 0) & 0xff) as u8;
-    buffer[1] = ((value >> 8) & 0xff)  as u8;
-    buffer[2] = ((value >> 16) & 0xff) as u8;
-    buffer[3] = ((value >> 24)& 0xff) as u8;
-    return buffer;
-}*/
-
-/*fn get_uint8(buffer:&Vec<u8>,index:usize)-> u32{
-
-    return ((buffer[index] >> 0) & 0xff) as u32;
-
-}*/
-
-fn get_uint16(buffer: &Vec<u8>, index: usize) -> u16 {
-    return (u16::from(buffer[index + 1]) << 8) | (u16::from(buffer[index]));
-}
-
-fn get_uint32(buffer: &Vec<u8>, index: usize) -> u32 {
-    return (u32::from(buffer[index + 3]) << 24)
-        | (u32::from(buffer[index + 2]) << 16)
-        | (u32::from(buffer[index + 1]) << 8)
-        | (u32::from(buffer[index]));
-}
-
-fn init_content() {
-    let mut message = MESSAGE.lock().unwrap();
-    message.content.resize(512, 0);
 }
 
 /**********************************************************************************************
@@ -129,58 +70,50 @@ fn init_content() {
 **********************************************************************************************/
 
 #[pyfunction]
-//start the lib
 fn start(_py: Python, id: String, name: String, ip: u32, link_count: u32) -> PyResult<()> {
     CONTAINERID.get_or_init(|| id.clone());
     CONTAINERNAME.get_or_init(|| name.clone());
     CONTAINERIP.get_or_init(|| ip);
-    CONTAINERLIMIT.get_or_init(|| match link_count {
-        n if n <= 255 => 8,
-        _ => 16,
-    });
+    CONTAINERLIMIT.get_or_init(|| if link_count <= 255 { 8 } else { 16 });
 
     //create files
     let pathwrite = "/tmp/pipewrite";
     let pathread = "/tmp/piperead";
+    let pathlocal = "/tmp/pipelocal";
 
     let pathread = format!("{}{}", pathread, id.to_string());
-
     let filename = CString::new(pathread.clone()).unwrap();
     unsafe {
         libc::mkfifo(filename.as_ptr(), 0o644);
     }
 
     let pathwrite = format!("{}{}", pathwrite, id.to_string());
-
     let filename = CString::new(pathwrite.clone()).unwrap();
     unsafe {
         libc::mkfifo(filename.as_ptr(), 0o644);
     }
 
-    let pathlocal = "/tmp/pipelocal";
     let pathlocal = format!("{}{}", pathlocal, id.to_string());
-
     let filename = CString::new(pathlocal.clone()).unwrap();
     unsafe {
         libc::mkfifo(filename.as_ptr(), 0o644);
     }
 
     //collect pipe for reading
-    print_message("STARTED GETTING READ PIPE".to_string());
+    print_message("GETTING READ PIPE");
     let fileread = OpenOptions::new()
         .read(true)
         .open(pathread)
         .expect("file not found");
-    print_message("GOT READ PIPE".to_string());
+    print_message("GOT READ PIPE");
 
     //collect pipe for writing
-    print_message("STARTED GETTING WRITE PIPE".to_string());
+    print_message("GETTING WRITE PIPE");
     let filewrite = OpenOptions::new()
         .write(true)
         .open(pathwrite)
         .expect("file not found");
-
-    print_message("GOT WRITE PIPE".to_string());
+    print_message("GOT WRITE PIPE");
 
     let mut communication = COMMUNICATION.lock().unwrap();
     communication.readpipe = Some(fileread);
@@ -189,60 +122,14 @@ fn start(_py: Python, id: String, name: String, ip: u32, link_count: u32) -> PyR
     Ok(())
 }
 
-//save reference to python
+// save reference to python
 #[pyfunction]
 fn register_communicationmanager(objectpython: PyObject) -> PyResult<()> {
     COMMUNICATIONMANAGER.get_or_init(|| objectpython);
     Ok(())
 }
 
-//start reading information from RM related to flows from other containers
-#[pyfunction]
-fn start_polling_u8() -> PyResult<()> {
-    let _handle = thread::spawn(move || {
-        //buffer to hold data
-        let mut _receive_buffer = vec![0; 1024];
-        loop {
-
-            // unsafe{
-            //     COMMUNICATION.readpipe.as_ref().unwrap().read(&mut receive_buffer).map_err(|err| print_message(format!("{:?}", err))).ok();
-            // }
-
-            // let mut recv_ptr = 0;
-
-            // let flow_count = receive_buffer[recv_ptr];
-            // recv_ptr += 1;
-
-            // //0 flows means the other node left
-            // if flow_count == 0{
-
-            // }else{
-            //     for _f in 0..flow_count {
-
-            //         let mut ids = Vec::new();
-
-            //         let bandwidth = get_uint32(&receive_buffer,recv_ptr);
-            //         recv_ptr += 4;
-
-            //         let link_count = receive_buffer[recv_ptr] as usize;
-            //         recv_ptr += 1;
-
-            //         for _l in 0..link_count {
-            //             ids.push(receive_buffer[recv_ptr]);
-            //             recv_ptr+=1;
-            //         }
-
-            //          callreceive_flow(bandwidth,link_count,ids);
-
-            //     }
-            // }
-        }
-    });
-
-    Ok(())
-}
-
-//same as u8 but for u16
+// start reading information from RM related to flows from other containers
 #[pyfunction]
 fn start_polling_u16() -> PyResult<()> {
     let _handle = thread::spawn(move || {
@@ -278,37 +165,26 @@ fn start_polling_u16() -> PyResult<()> {
     Ok(())
 }
 
-//call python to give information about flows from other containers
-fn callreceive_flow(bandwidth: u32, link_count: usize, ids: Vec<u8>) {
-    Python::with_gil(|py| {
-        let commsmanager = COMMUNICATIONMANAGER
-            .get()
-            .expect("communicationmanager must have been initialized");
-
-        commsmanager
-            .call_method(py, "receive_flow", (bandwidth, link_count, ids), None)
-            .map_err(|err| println!("{:?}", err))
-            .ok();
-    });
-}
-
-//call python to give information about flows from other containers
+// call python to give information about flows from other containers
 fn callreceive_flow_16(bandwidth: u32, link_count: u16, ids: Vec<u16>) {
     Python::with_gil(|py| {
         let commsmanager = COMMUNICATIONMANAGER
             .get()
-            .expect("communicationmanager must have been initialized");
+            .expect("communicationcore: communicationmanager must have been initialized");
 
         commsmanager
             .call_method(py, "receive_flow", (bandwidth, link_count, ids), None)
-            .map_err(|err| println!("{:?}", err))
+            .map_err(|err| println!("communicationcore: {:?}", err))
             .ok();
     });
 }
 
-fn print_message(message_to_print: String) {
+fn print_message(message_to_print: &str) {
     let container_name = CONTAINERNAME.get_or_init(|| "containername not initialized".to_string());
-    let message = format!("RUST EC - {} : {}", container_name, message_to_print);
+    let message = format!(
+        "communicationcore - {} : {}",
+        container_name, message_to_print
+    );
 
     println!("{}", message);
 }
