@@ -1,71 +1,52 @@
-FROM ubuntu:22.04
+FROM debian:12
 
 WORKDIR /
 
-# Location of netem distribution files on archlinux
-ARG openssl_arch=linux-x86_64
-
 ENV DEBIAN_FRONTEND=noninteractive \
     TC_LIB_DIR=/usr/lib/tc/ \
-    RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH \
-    KERNEL_VERSION=6.2.0-37-generic \
-    RUST_BACKTRACE=1 \
-    PIP_ROOT_USER_ACTION=ignore
-    #JEMALLOC_SYS_WITH_MALLOC_CONF=background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,abort_conf:true
-    
-RUN CONFIG_BPF=y \
-    CONFIG_BPF_SYSCALL=y \
-    CONFIG_NET_CLS_BPF=m \
-    CONFIG_NET_ACT_BPF=m \
-    CONFIG_BPF_JIT=y \ 
-    CONFIG_HAVE_BPF_JIT=y \
-    CONFIG_HAVE_EBPF_JIT=y \
-    CONFIG_BPF_EVENTS=y \
-    CONFIG_IKHEADERS=y \
-    CONFIG_NET_SCH_SFQ=m \
-    CONFIG_NET_ACT_POLICE=m \
-    CONFIG_NET_ACT_GACT=m \
-    CONFIG_DUMMY=m \
-    CONFIG_VXLAN=m
-    
+    PATH="/opt/venv/bin:$PATH"
 
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y\
-    gcc \
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    build-essential \
     flex \
-    bison \ 
+    bison \
     gettext \
     grep \
     iproute2 \
     iptables \
-    make \
     pkgconf \
     python3 \
-    python3-pip \
-    vim \
-    && apt-get clean -y
+    python3-venv \
+    python3-pip && \
+    apt-get clean -y
 
-ADD ./pid1 /Kollaps/pid1
+RUN python3 -m venv /opt/venv
+
+RUN /opt/venv/bin/pip install --upgrade pip setuptools wheel
+
+RUN /opt/venv/bin/pip install \
+    dnspython flask docker kubernetes netifaces openssh_wrapper netaddr requests==2.31.0
 
 ADD ./kollaps/ /Kollaps/kollaps
-
 ADD ./setup.py /Kollaps/setup.py
 
-RUN make -C /Kollaps/pid1 && \
-    cp /Kollaps/pid1/pid1 /usr/bin/pid1 && \
+RUN make -C /Kollaps/kollaps/tools/pid1 && \
+    cp /Kollaps/kollaps/tools/pid1/pid1 /usr/bin/pid1 && \
     make -C /Kollaps/kollaps/TCAL -j8 && \
-    pip3 --no-cache-dir install wheel dnspython flask docker kubernetes netifaces openssh_wrapper netaddr requests==2.31.0 && \
-    pip3 --no-cache-dir wheel --no-deps -w /Kollaps /Kollaps && \
-    pip3 --no-cache-dir install /Kollaps/kollaps-2.0-py3-none-any.whl && \
-    cp /Kollaps/kollaps/TCAL/libTCAL.so /usr/local/bin/libTCAL.so && \
-    cp -R /Kollaps/kollaps/rustbinaries/communicationmanager /usr/bin/communicationmanager  && \
-    cp -R /Kollaps/kollaps/rustbinaries/emulationcore /usr/bin/emulationcore  && \
-    cp /Kollaps/kollaps/rustbinaries/libcommunicationcore.so /usr/local/bin/libcommunicationcore.so && \   
-    rm -rf /Kollaps && \
-    pip3 --no-cache-dir uninstall -y setuptools wheel pip3
+    cp /Kollaps/kollaps/TCAL/libTCAL.so /usr/local/bin/libTCAL.so
 
-WORKDIR /
+# TODO remove libcommunicationcore.so from /usr/local/bin as only dashboard uses it
+RUN cp /Kollaps/kollaps/target/release/communicationmanager /usr/bin/communicationmanager  && \
+    cp /Kollaps/kollaps/target/release/emulationcore /usr/bin/emulationcore  && \
+    cp /Kollaps/kollaps/target/release/libcommunicationcore.so /usr/local/bin/libcommunicationcore.so && \
+    cp /Kollaps/kollaps/target/release/libcommunicationcore.so /Kollaps/kollaps/dashboard/
 
-ENTRYPOINT ["/usr/bin/pid1", "/usr/bin/python3", "-m", "kollaps.bootstrapper"]
+RUN /opt/venv/bin/pip wheel --no-deps -w /Kollaps /Kollaps && \
+    /opt/venv/bin/pip install /Kollaps/kollaps-2.0-py3-none-any.whl
+
+RUN /opt/venv/bin/pip uninstall -y setuptools wheel pip && \
+    rm -rf /Kollaps
+
+ENTRYPOINT ["/usr/bin/pid1", "/opt/venv/bin/python3", "-m", "kollaps.tools.bootstrapping.Bootstrapper"]

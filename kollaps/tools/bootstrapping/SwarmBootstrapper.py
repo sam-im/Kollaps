@@ -117,7 +117,7 @@ class SwarmBootstrapper(Bootstrapper):
             self.add_dashboard_id_container(container_id)
         
             cmd = ["nsenter", "-t", str(pid),
-                   "-n", "/usr/bin/python3", "/usr/local/bin/KollapsDashboard",
+                   "-n", "/opt/venv/bin/python3", "/opt/venv/bin/KollapsDashboard",
                    TOPOLOGY, str(container_id), str(pid)]
 
 

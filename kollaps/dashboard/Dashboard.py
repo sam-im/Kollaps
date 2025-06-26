@@ -27,9 +27,9 @@ from kollaps.tools.NetGraph import NetGraph
 from kollaps.tools.XMLGraphParser import XMLGraphParser
 from kollaps.tools.utils import int2ip, ip2int, setup_container, CONTAINER
 from kollaps.tools.utils import print_message, print_error, print_named
+from kollaps.dashboard import libcommunicationcore
 
 import dns.resolver
-import libcommunicationcore
 import socket
 import struct
 import sys
@@ -446,10 +446,9 @@ def start_rust():
     # else:
         # print_message("Started reading with u16")
         # libcommunicationcore.start_polling_u16()
-        
-    libcommunicationcore.start_polling_u16()
 
     libcommunicationcore.register_communicationmanager(RustComms(collect_flow))
+    libcommunicationcore.start_polling_u16()
 
 def query_until_ready():
     start_rust()
