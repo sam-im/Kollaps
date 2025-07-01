@@ -13,98 +13,102 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::BorrowMut;
-use std::sync::{Arc, Mutex};
-use std::fs::OpenOptions;
-use std::fs::File;
-use std::ffi::CString;
 use crate::state::State;
-use std::thread;
-use crate::aux::print_message;
-use capnp::serialize_packed;
 use capnp::message::{Builder, HeapAllocator};
+use capnp::serialize_packed;
 use capnp_schemas::message_capnp;
-use std::io::BufReader;
 use libc::O_WRONLY;
+use std::borrow::BorrowMut;
+use std::ffi::CString;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::BufReader;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use tracing::{debug, error, info};
 
-
-pub struct Communication{
-    pub id:String,
-    pub ip:u32,
-    writepipe:Option<File>,
-    readpipe:Arc<Mutex<Option<File>>>,
+pub struct Communication {
+    pub id: String,
+    pub ip: u32,
+    writepipe: Option<File>,
+    readpipe: Arc<Mutex<Option<File>>>,
     pub name: String,
-    pub filewriter:Option<File>,
-    pub filereader:Arc<Mutex<Option<BufReader<File>>>>,
+    pub filewriter: Option<File>,
+    pub filereader: Arc<Mutex<Option<BufReader<File>>>>,
 }
 
-impl Communication{
-    pub fn new(id:String) -> Communication{
-
-        Communication{
-            id:id.clone(),
-            ip:0,
-            writepipe:None,
-            readpipe:Arc::new(Mutex::new(None)),
-            name:"".to_string(),
-            filewriter:None,
-            filereader:Arc::new(Mutex::new(None)),
-
-            
+impl Communication {
+    pub fn new(id: String) -> Communication {
+        Communication {
+            id: id.clone(),
+            ip: 0,
+            writepipe: None,
+            readpipe: Arc::new(Mutex::new(None)),
+            name: "".to_string(),
+            filewriter: None,
+            filereader: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub fn init(&mut self){
-
+    pub fn init(&mut self) {
         let pathwrite = "/tmp/pipewrite";
         let pathread = "/tmp/piperead";
 
-
-        let pathread = format!("{}{}",pathread ,self.id.to_string());
-
+        let pathread = format!("{}{}", pathread, self.id.to_string());
 
         let filename = CString::new(pathread.clone()).unwrap();
-            unsafe {
-                libc::mkfifo(filename.as_ptr(), O_WRONLY as u32);
-            }
+        unsafe {
+            libc::mkfifo(filename.as_ptr(), O_WRONLY as u32);
+        }
 
-        
-        let pathwrite = format!("{}{}",pathwrite,self.id.to_string());
-
+        let pathwrite = format!("{}{}", pathwrite, self.id.to_string());
 
         let filename = CString::new(pathwrite.clone()).unwrap();
         unsafe {
             libc::mkfifo(filename.as_ptr(), O_WRONLY as u32);
         }
 
-        let readpipe = Some(OpenOptions::new().read(true).open(pathread.clone()).expect("file not found"));
+        let readpipe = Some(
+            OpenOptions::new()
+                .read(true)
+                .open(pathread.clone())
+                .expect("file not found"),
+        );
 
         self.readpipe = Arc::new(Mutex::new(readpipe));
 
-        self.writepipe = Some(OpenOptions::new().write(true).open(pathwrite.clone()).expect("file not found"));
-
-
-
+        self.writepipe = Some(
+            OpenOptions::new()
+                .write(true)
+                .open(pathwrite.clone())
+                .expect("file not found"),
+        );
+        info!("EC {}: initialized communication pipes", self.id);
     }
 
-    pub fn start_polling(&mut self,state:Arc<Mutex<State>>,linkcount:u32){
-
-        start_polling_u16(state.clone(),self.readpipe.clone());
-
+    pub fn start_polling(&mut self, state: Arc<Mutex<State>>) {
+        start_polling_u16(state.clone(), self.readpipe.clone());
+        info!("EC {}: polling thread started", self.name);
     }
 
-
-    pub fn init_message<'a>(&mut self,mut msg: message_capnp::message::Builder<'a>, round_number:u32,flow_count:u32){
-    
+    pub fn init_message<'a>(
+        &mut self,
+        mut msg: message_capnp::message::Builder<'a>,
+        round_number: u32,
+        flow_count: u32,
+    ) {
         msg.set_round(round_number);
         msg.init_flows(flow_count);
-
-
     }
 
-
-    pub fn add_flow<'a>(&mut self,msg: message_capnp::message::Builder<'a>, bandwidth:u32,len_links:u32,links_vector:Vec<u16>,flow_number:u32){
-
+    pub fn add_flow<'a>(
+        &mut self,
+        msg: message_capnp::message::Builder<'a>,
+        bandwidth: u32,
+        len_links: u32,
+        links_vector: Vec<u16>,
+        flow_number: u32,
+    ) {
         let flows = msg.get_flows().unwrap();
 
         let mut flow = flows.get(flow_number);
@@ -113,50 +117,50 @@ impl Communication{
 
         let mut links = flow.init_links(len_links);
 
-        for i in 0..links_vector.len(){
-            links.reborrow().get(i as u32).set_id(links_vector[i as usize]);
+        for i in 0..links_vector.len() {
+            links
+                .reborrow()
+                .get(i as u32)
+                .set_id(links_vector[i as usize]);
         }
     }
 
-
-    pub fn send_message(&mut self,msg:Builder<HeapAllocator>){
-        
+    pub fn send_message(&mut self, msg: Builder<HeapAllocator>) {
         serialize_packed::write_message(self.writepipe.as_ref().unwrap(), &msg).unwrap();
-
     }
-
-
 }
 
-
 //Pool info from our pipe
-fn start_polling_u16(state:Arc<Mutex<State>>,readpipe:Arc<Mutex<Option<File>>>){
-
-    let _handle = thread::spawn(move || {
-    //buffer to hold data
-        let name: String = state.lock().unwrap().name.clone();
+fn start_polling_u16(state: Arc<Mutex<State>>, readpipe: Arc<Mutex<Option<File>>>) {
+    thread::spawn(move || {
+        //buffer to hold data
+        let name = state.lock().unwrap().name.clone();
         let readpipe_unlocked = readpipe.lock().unwrap();
-        let mut filereader = BufReader::new(readpipe_unlocked.as_ref().unwrap());  
-        loop{
-            
+        let mut filereader = BufReader::new(readpipe_unlocked.as_ref().unwrap());
 
-            let message_reader = serialize_packed::read_message(filereader.borrow_mut(),capnp::message::ReaderOptions::new()).unwrap();
+        loop {
+            let message_reader = serialize_packed::read_message(
+                filereader.borrow_mut(),
+                capnp::message::ReaderOptions::new(),
+            )
+            .unwrap();
 
-            
-            let message: message_capnp::message::Reader<'_> = match message_reader.get_root::<message_capnp::message::Reader>(){
-                Ok(message)=>{
-                    message
-                },
-                Err(e)=>{
-                    print_message(name.clone(),format!("Error in parsing message {} \n Contents: {:?}",e,message_reader.canonicalize()).to_string());
-                    continue;
-
-                }
-            };
+            let message: message_capnp::message::Reader<'_> =
+                match message_reader.get_root::<message_capnp::message::Reader>() {
+                    Ok(message) => message,
+                    Err(e) => {
+                        error!(
+                            "EC {} - error {} parsing message {:?}",
+                            name,
+                            e,
+                            message_reader.canonicalize()
+                        );
+                        continue;
+                    }
+                };
 
             let flows = message.get_flows().unwrap();
-            for flow in flows{
-
+            for flow in flows {
                 let bandwidth = flow.get_bw();
 
                 let links = flow.get_links().unwrap();
@@ -165,22 +169,26 @@ fn start_polling_u16(state:Arc<Mutex<State>>,readpipe:Arc<Mutex<Option<File>>>){
 
                 let mut ids = vec![];
 
-                for i in 0..link_count{
-                    ids.push(links.get(i as u32).get_id());
-                } 
+                for i in 0..link_count {
+                    ids.push(links.get(i.into()).get_id());
+                }
 
-                callreceive_flow_16(state.clone(),bandwidth,link_count,ids);
-
+                callreceive_flow_16(state.clone(), bandwidth, link_count, ids);
             }
-            
         }
-        
     });
-
 }
 
-
-fn callreceive_flow_16(state:Arc<Mutex<State>>,bandwidth:u32,link_count:u16,ids:Vec<u16>){
-
-    state.lock().unwrap().get_current_graph().lock().unwrap().collect_flow_u16(bandwidth as f32,link_count,ids.clone());
+fn callreceive_flow_16(state: Arc<Mutex<State>>, bandwidth: u32, link_count: u16, ids: Vec<u16>) {
+    debug!(
+        "EC received flow message bandwidth: {}, link_count: {}, ids: {:?}",
+        bandwidth, link_count, ids
+    );
+    state
+        .lock()
+        .unwrap()
+        .get_current_graph()
+        .lock()
+        .unwrap()
+        .collect_flow_u16(bandwidth as f32, link_count, ids);
 }

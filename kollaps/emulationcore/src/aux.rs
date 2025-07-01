@@ -1,4 +1,3 @@
-
 // Licensed to the Apache Software Foundation (ASF) under one or more
 // contributor license agreements.  See the NOTICE file distributed with
 // this work for additional information regarding copyright ownership.
@@ -14,21 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use crate::elements::Service;
-use std::sync::{Arc, Mutex};
 use std::process;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time;
-use subprocess::PopenConfig;
 use subprocess::Popen;
+use subprocess::PopenConfig;
 use subprocess::Redirection;
+use tracing::{error, info};
 
-
-
-//converts an array of u8 to an ip
-pub fn convert_to_int(octets:[u8;4]) -> u32{
-    return ((octets[0] as u32) <<24)+((octets[1] as u32) <<16)+((octets[2] as u32) <<8)+octets[3] as u32 
+pub fn convert_to_int(octets: [u8; 4]) -> u32 {
+    return ((octets[0] as u32) << 24)
+        + ((octets[1] as u32) << 16)
+        + ((octets[2] as u32) << 8)
+        + octets[3] as u32;
 }
 
 pub fn get_own_ip(networkdevice: Option<String>) -> u32 {
@@ -43,7 +42,9 @@ pub fn get_own_ip(networkdevice: Option<String>) -> u32 {
         .into_iter()
         .find(|iface| iface.name == interface_name);
 
-    if interface.is_none() { return 0; }
+    if interface.is_none() {
+        return 0;
+    }
     let addr = interface.unwrap().ips.iter().find_map(|ip| {
         if let ipnetwork::IpNetwork::V4(ipv4) = ip {
             Some(ipv4.ip())
@@ -58,40 +59,40 @@ pub fn get_own_ip(networkdevice: Option<String>) -> u32 {
     }
 }
 
-pub fn print_message(name:String,message_to_print:String){
-    let message;
-    message = Some(format!("RUST EC - {} : {} ",name,message_to_print));
-    println!("{}",message.as_ref().unwrap());
+pub fn print_message(name: String, message_to_print: String) {
+    info!("EC {}: {}", name, message_to_print);
 }
 
 //Struct used for the djisktra algorithm
-pub struct Dijkstraentry{
-    pub distance:f32,
-    pub node:Arc<Mutex<Service>>,
-
-
+pub struct Dijkstraentry {
+    pub distance: f32,
+    pub node: Arc<Mutex<Service>>,
 }
 
-impl Dijkstraentry{
-    pub fn new(distance:f32,node:Arc<Mutex<Service>>) -> Dijkstraentry{
-        Dijkstraentry{
-            distance:distance,
-            node:node
+impl Dijkstraentry {
+    pub fn new(distance: f32, node: Arc<Mutex<Service>>) -> Dijkstraentry {
+        Dijkstraentry {
+            distance: distance,
+            node: node,
         }
     }
 }
 
-pub fn print_and_fail(message:String){
-
-    println!("{}",message);
+pub fn print_and_fail(message: String) {
+    error!("{}", message);
     let sleeptime = time::Duration::from_millis(500);
     thread::sleep(sleeptime);
 
     process::exit(0);
 }
 
-pub fn start_script(script:String){
-    Popen::create(&["sh",&script], PopenConfig {
-        stdout: Redirection::Pipe, ..Default::default()
-    }).unwrap();
+pub fn start_script(script: String) {
+    Popen::create(
+        &["sh", &script],
+        PopenConfig {
+            stdout: Redirection::Pipe,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 }

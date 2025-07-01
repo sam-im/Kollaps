@@ -13,69 +13,70 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod state;
-mod graph;
+mod aux;
+mod communication;
+mod docker;
 mod elements;
 mod emulation;
-mod xmlgraphparser;
-mod aux;
-mod eventscheduler;
-mod docker;
 mod emulationcore;
-mod communication;
+mod eventscheduler;
+mod graph;
+mod state;
+mod xmlgraphparser;
 
 use crate::emulationcore::EmulationCore;
 
 use std::env;
 use tokio::runtime;
 
+use tracing::{Level, info};
+use tracing_subscriber::FmtSubscriber;
 
-fn main(){
+fn main() {
+    // Logging
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO) // set to `LevelFilter::OFF` to disable logging completely
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    if env::args().len() == 4{
+    // TODO move parsing arguments to here
+    // TODO move runtime initialization to here
+    if env::args().len() == 4 {
         container_deployment();
-    }else{
-        baremental_deployment();
+    } else {
+        baremetal_deployment();
     }
 }
 
-fn container_deployment(){
-    let id = env::args()
-        .nth(1)
-        .unwrap();
-    
-    let pid = env::args()
-        .nth(2)
+fn container_deployment() {
+    let id = env::args().nth(1).unwrap();
+
+    let pid = env::args().nth(2).unwrap().parse::<u32>().unwrap();
+
+    let orchestrator = env::args().nth(3).unwrap();
+
+    let basic_rt = runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
         .unwrap();
 
-    let orchestrator = env::args()
-        .nth(3)
-        .unwrap();
-
-    
-    let pid = pid.parse::<u32>().unwrap();
-
-    println!("Started EC with ID {}",id.clone());
-    let mut ec = EmulationCore::new(id.clone(),pid,orchestrator);
+    info!("EC {} starting", id);
+    let mut ec = EmulationCore::new(id.clone(), pid, orchestrator);
     ec.init();
-
-    let basic_rt = runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
-    basic_rt.block_on(async move{ec.emulation_loop().await});
-
-    println!("STOPPED EC with ID {}",id.clone());
-
+    basic_rt.block_on(async move { ec.emulation_loop().await });
+    info!("EC {}: stopping", id);
 }
 
-fn baremental_deployment(){
-
-    println!("Started EC");
+fn baremetal_deployment() {
+    info!("EC: baremetal deployment started");
     let topology_file = env::args().nth(1).unwrap();
 
     let cm_file = env::args().nth(2).unwrap();
 
     let networkdevice = env::args().nth(3).unwrap();
 
-    let mut ec = EmulationCore::new("".to_string(),0,"baremetal".to_string());
+    let mut ec = EmulationCore::new("".to_string(), 0, "baremetal".to_string());
 
     ec.set_topology_file(topology_file);
 
@@ -85,8 +86,11 @@ fn baremental_deployment(){
 
     ec.init_baremetal();
 
-    let basic_rt = runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
-    basic_rt.block_on(async move{ec.emulation_loop().await});
-    println!("STOPPED EMULATION");
-
+    let basic_rt = runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    basic_rt.block_on(async move { ec.emulation_loop().await });
+    info!("EC: stopped emulation");
 }

@@ -1,12 +1,12 @@
 // This file exists to enable the library target
 // for the `controller` crate.
-pub mod state;
-pub mod xmlgraphparser;
 pub mod aux;
-mod emulationcore;
-mod graph;
+mod communication;
+mod docker;
 mod elements;
 mod emulation;
+mod emulationcore;
 mod eventscheduler;
-mod docker;
-mod communication;
+mod graph;
+pub mod state;
+pub mod xmlgraphparser;

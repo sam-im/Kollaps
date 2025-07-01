@@ -13,293 +13,388 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::state::State;
-use std::sync::Mutex;
-use std::sync::Arc;
-use std::time::Instant;
-use std::time::Duration;
-use std::thread;
+use crate::aux::start_script;
 use crate::docker::start_experiment;
 use crate::docker::stop_experiment;
+use crate::state::State;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::runtime::Handle;
-use crate::aux::{start_script,print_message};
+use tracing::info;
 
-pub struct EventScheduler{
-    pub events:Vec<Event>,
-    pub state:Arc<Mutex<State>>,
-    pub timebetweenevents:Vec<f32>,
-    pub pid:u32,
-    pub tokiohandler:Option<Handle>,
-    orchestrator:String,
-    pub script:String,
-    pub name:String,
-    pub shortest_path_type:String
-
+pub struct EventScheduler {
+    pub events: Vec<Event>,
+    pub state: Arc<Mutex<State>>,
+    pub timebetweenevents: Vec<f32>,
+    pub pid: u32,
+    pub tokiohandler: Option<Handle>,
+    orchestrator: String,
+    pub script: String,
+    pub name: String,
+    pub shortest_path_type: String,
 }
 
-impl EventScheduler{
-    pub fn new(state:Arc<Mutex<State>>,orchestrator:String) -> EventScheduler{
-        EventScheduler{
-            events:vec![],
-            name:"".to_string(),
-            state:state,
-            timebetweenevents:vec![],
-            pid:0,
-            tokiohandler:None,
+impl EventScheduler {
+    pub fn new(state: Arc<Mutex<State>>, orchestrator: String) -> EventScheduler {
+        EventScheduler {
+            events: vec![],
+            name: "".to_string(),
+            state: state,
+            timebetweenevents: vec![],
+            pid: 0,
+            tokiohandler: None,
             orchestrator,
-            script:"".to_string(),
-            shortest_path_type:"hop".to_string()
+            script: "".to_string(),
+            shortest_path_type: "hop".to_string(),
         }
     }
 
-    pub fn schedule_join(&mut self,time:f32){
-
-        let event = Event::new(0,time);
-
-        self.events.push(event);
-    }
-
-    
-    pub fn schedule_leave(&mut self,time:f32){
-
-        let event = Event::new(2,time);
-        self.events.push(event);
-    }
-    
-    
-    pub fn schedule_crash(&mut self,time:f32){
-        let event = Event::new(3,time);
+    pub fn schedule_join(&mut self, time: f32) {
+        let event = Event::new(0, time);
 
         self.events.push(event);
     }
 
-    pub fn schedule_disconnect(&mut self,time:f32){
+    pub fn schedule_leave(&mut self, time: f32) {
+        let event = Event::new(2, time);
+        self.events.push(event);
+    }
 
-        let event = Event::new(4,time);
+    pub fn schedule_crash(&mut self, time: f32) {
+        let event = Event::new(3, time);
 
         self.events.push(event);
     }
 
-    pub fn schedule_reconnect(&mut self,time:f32){
-
-        let event = Event::new(5,time);
+    pub fn schedule_disconnect(&mut self, time: f32) {
+        let event = Event::new(4, time);
 
         self.events.push(event);
     }
 
-    pub fn schedule_bridge_join(&mut self,time:f32,bridge_name:String){
+    pub fn schedule_reconnect(&mut self, time: f32) {
+        let event = Event::new(5, time);
 
-        self.state.lock().unwrap().insert_graph();
-
-        let bridge = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().removed_bridges.get(&bridge_name).unwrap().clone();
-
-        self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().bridges_by_name.insert(bridge_name.clone(),bridge.clone());
-
-        //if it already existed remove it from removed_bridges
-        self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().removed_bridges.remove(&bridge_name);
-        
-        self.recompute_and_store();
-
-        let event = Event::new(1,time);
-        
         self.events.push(event);
     }
 
+    pub fn schedule_bridge_join(&mut self, time: f32, bridge_name: String) {
+        {
+            let state_handle = self.state.clone();
+            let mut state = state_handle.lock().unwrap();
 
-    pub fn schedule_bridge_leave(&mut self,time:f32,bridge_name:String){
+            state.insert_graph();
 
-        self.state.lock().unwrap().insert_graph();
+            let most_recent_graph_handle = state.get_graph_most_recent();
+            let mut most_recent_graph = most_recent_graph_handle.lock().unwrap();
 
-        let bridges = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().bridges_by_name.get(&bridge_name).unwrap().clone();
-
-        //insert in removed_bridges
-        self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().removed_bridges.insert(bridge_name.clone(),bridges);
-
-        //remove from bridges_by_name
-        self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().bridges_by_name.remove(&bridge_name);
-
-        self.recompute_and_store();
-
-        let event = Event::new(1,time);
-
-        self.events.push(event);
-
-        
-    }
-
-    pub fn schedule_link_leave(&mut self,time:f32,origin:String,destination:String){
-
-
-        self.state.lock().unwrap().insert_graph();
-
-        let links = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().links.clone();
-
-        //get id of links with origin and destination
-        let mut ids = vec![];
-        for (id,link) in links.iter(){
-            let source = link.lock().unwrap().source.lock().unwrap().hostname.clone();
-
-            let dest = link.lock().unwrap().destination.lock().unwrap().hostname.clone();
-
-            if source == origin && dest == destination{
-                ids.push(id);
-                self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().removed_links.push(link.clone());
-            }
-
+            let bridge = most_recent_graph
+                .removed_bridges
+                .remove(&bridge_name)
+                .unwrap();
+            most_recent_graph
+                .bridges_by_name
+                .insert(bridge_name.clone(), bridge);
         }
 
-        //remove them from the services and bridges
-        for id in ids{
-            self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().links.remove(id);
+        self.recompute_and_store();
 
-            let services = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().services.clone();
+        let event = Event::new(1, time);
 
+        self.events.push(event);
+    }
 
-            for (_ip,service) in services.iter(){
-                service.lock().unwrap().remove_link(*id);
-            }
+    pub fn schedule_bridge_leave(&mut self, time: f32, bridge_name: String) {
+        {
+            let state_handle = self.state.clone();
+            let mut state = state_handle.lock().unwrap();
 
-            let bridges = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().bridges.clone();
+            state.insert_graph();
 
+            let most_recent_graph_handle = state.get_graph_most_recent();
+            let mut most_recent_graph = most_recent_graph_handle.lock().unwrap();
 
-            for (_ip,bridge) in bridges.iter(){
-                bridge.lock().unwrap().remove_link(*id);
-            }
-
+            let bridges = most_recent_graph
+                .bridges_by_name
+                .remove(&bridge_name)
+                .unwrap();
+            most_recent_graph
+                .removed_bridges
+                .insert(bridge_name.clone(), bridges);
         }
 
-        let event = Event::new(1,time);
+        self.recompute_and_store();
+
+        let event = Event::new(1, time);
+
+        self.events.push(event);
+    }
+
+    pub fn schedule_link_leave(&mut self, time: f32, origin: String, destination: String) {
+        {
+            let state_handle = self.state.clone();
+            let mut state = state_handle.lock().unwrap();
+
+            state.insert_graph();
+
+            let most_recent_graph_handle = state.get_graph_most_recent();
+            let mut most_recent_graph = most_recent_graph_handle.lock().unwrap();
+
+            let links = most_recent_graph.links.clone();
+
+            //get id of links with origin and destination
+            let mut ids = vec![];
+            for (id, link_handle) in links.iter() {
+                let link = link_handle.lock().unwrap();
+
+                let source = link.source.lock().unwrap().hostname.clone();
+                let dest = link.destination.lock().unwrap().hostname.clone();
+
+                if source == origin && dest == destination {
+                    ids.push(id);
+                    most_recent_graph.removed_links.push(link_handle.clone());
+                }
+            }
+
+            //remove them from the services and bridges
+            for id in ids {
+                most_recent_graph.links.remove(id);
+
+                let services = most_recent_graph.services.clone();
+
+                for (_ip, service) in services.iter() {
+                    service.lock().unwrap().remove_link(*id);
+                }
+
+                let bridges = most_recent_graph.bridges.clone();
+
+                for (_ip, bridge) in bridges.iter() {
+                    bridge.lock().unwrap().remove_link(*id);
+                }
+            }
+        }
+
+        let event = Event::new(1, time);
 
         self.events.push(event);
 
         self.recompute_and_store();
-
-
     }
 
-    pub fn schedule_link_join(&mut self,time:f32,origin:String,destination:String) -> bool{
-
-
+    pub fn schedule_link_join(&mut self, time: f32, origin: String, destination: String) -> bool {
         self.state.lock().unwrap().insert_graph();
 
         let mut joining_links = vec![];
 
-        let removed_links = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().removed_links.clone();
+        let removed_links = self
+            .state
+            .lock()
+            .unwrap()
+            .get_graph_most_recent()
+            .lock()
+            .unwrap()
+            .removed_links
+            .clone();
 
         let mut link_existed = false;
 
         //remove from removed_links and get joining links
-        for (i,link) in removed_links.iter().enumerate(){
-
+        for (i, link) in removed_links.iter().enumerate() {
             let source = link.lock().unwrap().source.lock().unwrap().hostname.clone();
 
-            let dest = link.lock().unwrap().destination.lock().unwrap().hostname.clone();
+            let dest = link
+                .lock()
+                .unwrap()
+                .destination
+                .lock()
+                .unwrap()
+                .hostname
+                .clone();
 
-            if source == origin && dest == destination{
+            if source == origin && dest == destination {
                 joining_links.push(link.clone());
-                self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().removed_links.remove(i);
-                self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().links.insert(link.lock().unwrap().id,link.clone());
+                self.state
+                    .lock()
+                    .unwrap()
+                    .get_graph_most_recent()
+                    .lock()
+                    .unwrap()
+                    .removed_links
+                    .remove(i);
+                self.state
+                    .lock()
+                    .unwrap()
+                    .get_graph_most_recent()
+                    .lock()
+                    .unwrap()
+                    .links
+                    .insert(link.lock().unwrap().id, link.clone());
             }
-
         }
 
         //add them to services and bridges
-        for link in joining_links{
-
+        for link in joining_links {
             link_existed = true;
 
-            let services = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().services_by_name.clone();
+            let services = self
+                .state
+                .lock()
+                .unwrap()
+                .get_graph_most_recent()
+                .lock()
+                .unwrap()
+                .services_by_name
+                .clone();
             let source = link.lock().unwrap().source.lock().unwrap().hostname.clone();
-            for (name,services) in services.iter(){
-                if source == *name{
-                    for service in services{
+            for (name, services) in services.iter() {
+                if source == *name {
+                    for service in services {
                         service.lock().unwrap().attach_link(link.lock().unwrap().id);
                     }
                 }
             }
-            let bridges = self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().bridges_by_name.clone();
+            let bridges = self
+                .state
+                .lock()
+                .unwrap()
+                .get_graph_most_recent()
+                .lock()
+                .unwrap()
+                .bridges_by_name
+                .clone();
 
-            for (name,bridges) in bridges.iter(){
-                if source == *name{
-                    for bridge in bridges{
+            for (name, bridges) in bridges.iter() {
+                if source == *name {
+                    for bridge in bridges {
                         bridge.lock().unwrap().attach_link(link.lock().unwrap().id);
                     }
                 }
             }
         }
 
-        let event = Event::new(1,time);
+        let event = Event::new(1, time);
 
         self.events.push(event);
 
         self.recompute_and_store();
-
-        
 
         return link_existed;
     }
 
-    pub fn schedule_new_link(&mut self,time:f32,origin:String,destination:String,latency:f32,jitter:f32,drop:f32,bandwidth:f32){
-        
+    pub fn schedule_new_link(
+        &mut self,
+        time: f32,
+        origin: String,
+        destination: String,
+        latency: f32,
+        jitter: f32,
+        drop: f32,
+        bandwidth: f32,
+    ) {
         self.state.lock().unwrap().insert_graph();
 
-        self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().insert_link(latency,jitter,drop,bandwidth,origin,destination);
-   
-        let event = Event::new(1,time);
+        self.state
+            .lock()
+            .unwrap()
+            .get_graph_most_recent()
+            .lock()
+            .unwrap()
+            .insert_link(latency, jitter, drop, bandwidth, origin, destination);
+
+        let event = Event::new(1, time);
 
         self.events.push(event);
-        
+
         self.recompute_and_store();
     }
 
-    pub fn schedule_link_change(&mut self,time:f32,origin:String,destination:String,latency:f32,jitter:f32,drop:f32,bandwidth:f32){
-    
+    pub fn schedule_link_change(
+        &mut self,
+        time: f32,
+        origin: String,
+        destination: String,
+        latency: f32,
+        jitter: f32,
+        drop: f32,
+        bandwidth: f32,
+    ) {
         self.state.lock().unwrap().insert_graph();
 
-        for (_id,link) in self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().links.iter_mut(){
+        for (_id, link) in self
+            .state
+            .lock()
+            .unwrap()
+            .get_graph_most_recent()
+            .lock()
+            .unwrap()
+            .links
+            .iter_mut()
+        {
             let link_origin = link.lock().unwrap().source.lock().unwrap().hostname.clone();
-            let link_dest = link.lock().unwrap().destination.lock().unwrap().hostname.clone();
+            let link_dest = link
+                .lock()
+                .unwrap()
+                .destination
+                .lock()
+                .unwrap()
+                .hostname
+                .clone();
 
-            if origin == link_origin && link_dest == destination{
-                if bandwidth >= 0.0{
+            if origin == link_origin && link_dest == destination {
+                if bandwidth >= 0.0 {
                     link.lock().unwrap().bandwidth = bandwidth;
                 }
-                if latency >= 0.0{
-                    link.lock().unwrap().latency= latency;
+                if latency >= 0.0 {
+                    link.lock().unwrap().latency = latency;
                 }
-                if jitter >= 0.0{
+                if jitter >= 0.0 {
                     link.lock().unwrap().jitter = jitter;
                 }
-                if drop >= 0.0{
+                if drop >= 0.0 {
                     link.lock().unwrap().drop = drop;
                 }
 
                 //print_message(self.name.clone(),format!("origin is {} and dest is {} and new latency is {}",origin,destination,latency).to_string());
             }
-
         }
-   
-        let event = Event::new(1,time);
+
+        let event = Event::new(1, time);
 
         self.events.push(event);
-        
+
         self.recompute_and_store();
     }
 
-
-
-    pub fn recompute_and_store(&mut self){
-
-        if self.shortest_path_type.eq("hop"){
-            self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().calculate_shortest_paths();
+    pub fn recompute_and_store(&mut self) {
+        if self.shortest_path_type.eq("hop") {
+            self.state
+                .lock()
+                .unwrap()
+                .get_graph_most_recent()
+                .lock()
+                .unwrap()
+                .calculate_shortest_paths();
         }
-        if self.shortest_path_type.eq("latency"){
-            self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().calculate_shortest_paths_latency();
+        if self.shortest_path_type.eq("latency") {
+            self.state
+                .lock()
+                .unwrap()
+                .get_graph_most_recent()
+                .lock()
+                .unwrap()
+                .calculate_shortest_paths_latency();
         }
 
-
-        self.state.lock().unwrap().get_graph_most_recent().lock().unwrap().calculate_properties();
-        
+        self.state
+            .lock()
+            .unwrap()
+            .get_graph_most_recent()
+            .lock()
+            .unwrap()
+            .calculate_properties();
     }
 
     // pub fn print_events(&mut self){
@@ -308,77 +403,89 @@ impl EventScheduler{
     //     }
     // }
 
-    pub fn start(&mut self){
-        println!("Started experiment");
+    pub fn start(&mut self) {
+        info!("EC {}: started experiment", self.name);
         let now = Instant::now();
         let mut count = 0;
 
         //self.print_events();
 
-        loop{   
-            if now.elapsed().as_millis() >= (self.events[count].time * 1000.0) as u128{
-                if self.events[count].id == 0{
-
+        loop {
+            if now.elapsed().as_millis() >= (self.events[count].time * 1000.0) as u128 {
+                if self.events[count].id == 0 {
                     let id = self.state.lock().unwrap().id.clone();
 
-                    if self.orchestrator == "baremetal"{
-
-                        if self.script != ""{
-                            println!("STARTED SCRIPT WITH NAME {}",self.script.clone());
+                    if self.orchestrator == "baremetal" {
+                        if self.script != "" {
+                            info!(
+                                "EC {}: started script with name {}",
+                                self.name,
+                                self.script.clone()
+                            );
                             start_script(self.script.clone());
                         }
-                    }
-                    else{
-                        self.tokiohandler.as_ref().unwrap().spawn(async move{start_experiment(id).await});
-                        print_message(self.name.clone(), "Started my script".to_string());
+                    } else {
+                        self.tokiohandler
+                            .as_ref()
+                            .unwrap()
+                            .spawn(async move { start_experiment(id).await });
+                        info!("EC {}: started my script", self.name);
                     }
                     //task::spawn(start_experiment(self.state.lock().unwrap().id.clone()));
                 }
 
-                if self.events[count].id == 3{
-                    stop_experiment(self.pid.clone(),3);
+                if self.events[count].id == 3 {
+                    stop_experiment(self.pid.clone(), 3);
                 }
-                if self.events[count].id == 2{
-                    stop_experiment(self.pid.clone(),2);
+                if self.events[count].id == 2 {
+                    stop_experiment(self.pid.clone(), 2);
                 }
-                if self.events[count].id == 1{
+                if self.events[count].id == 1 {
                     self.state.lock().unwrap().increment_age();
                 }
 
-                if self.events[count].id == 4{
-                    self.state.lock().unwrap().emulation.lock().unwrap().disconnect();
+                if self.events[count].id == 4 {
+                    self.state
+                        .lock()
+                        .unwrap()
+                        .emulation
+                        .lock()
+                        .unwrap()
+                        .disconnect();
                 }
 
-                if self.events[count].id == 5{
-                    self.state.lock().unwrap().emulation.lock().unwrap().reconnect();
+                if self.events[count].id == 5 {
+                    self.state
+                        .lock()
+                        .unwrap()
+                        .emulation
+                        .lock()
+                        .unwrap()
+                        .reconnect();
                 }
-                if count == self.events.len() - 1{
-                    println!("BROKE OUT");
+                if count == self.events.len() - 1 {
+                    info!("EC {}: all events concluded", self.name);
                     break;
                 }
-                count = count +1;
-                
+                count = count + 1;
             }
             thread::sleep(Duration::from_secs_f32(0.5));
         }
-
     }
 
-    pub fn sort_events(&mut self){
-        self.events.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+    pub fn sort_events(&mut self) {
+        self.events
+            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
     }
 }
 
-pub struct Event{   
-    pub id:u32,
-    pub time:f32
+pub struct Event {
+    pub id: u32,
+    pub time: f32,
 }
 
-impl Event{
-    pub fn new(id:u32,time:f32) -> Event{
-        Event{
-            id:id,
-            time:time
-        }
+impl Event {
+    pub fn new(id: u32, time: f32) -> Event {
+        Event { id: id, time: time }
     }
 }

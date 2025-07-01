@@ -15,15 +15,16 @@
 
 use std::sync::OnceLock;
 
-use docker_api::opts::{ExecStartOpts, ExecCreateOpts};
 use docker_api::Exec;
-use subprocess::PopenConfig;
+use docker_api::opts::{ExecCreateOpts, ExecStartOpts};
 use subprocess::Popen;
+use subprocess::PopenConfig;
 use subprocess::Redirection;
+use tracing::info;
 
 static COMMAND_STRING: OnceLock<String> = OnceLock::new();
 
-pub async fn start_experiment(id:String){
+pub async fn start_experiment(id: String) {
     get_command_string(id.clone()).await;
 
     let docker = docker_api::Docker::unix("/var/run/docker.sock");
@@ -31,7 +32,7 @@ pub async fn start_experiment(id:String){
 
     let command_string;
     if COMMAND_STRING.get().map_or_else(|| true, |s| s.is_empty()) {
-        println!("Leaving start experiment nothing to do");
+        info!("EC: leaving start experiment nothing to do");
         return;
     } else {
         command_string = COMMAND_STRING
@@ -45,7 +46,7 @@ pub async fn start_experiment(id:String){
 
     args.push("/bin/sh");
     args.push("-c");
- 
+
     args.push(&command_string);
 
     // Create Opts with specified command
@@ -64,11 +65,11 @@ pub async fn start_experiment(id:String){
 }
 
 //Retrieve the command to run
-pub async fn get_command_string(id:String){
+pub async fn get_command_string(id: String) {
     let docker = docker_api::Docker::unix("/var/run/docker.sock");
 
     let container = docker.containers().get(id);
-    
+
     let mut command_string = "".to_string();
     match container.inspect().await {
         Ok(container) => {
@@ -79,43 +80,38 @@ pub async fn get_command_string(id:String){
             let docker_image = docker.images().get(image.unwrap());
 
             let mut command = vec![];
-            match docker_image.inspect().await{
-                Ok(image) =>{
+            match docker_image.inspect().await {
+                Ok(image) => {
                     let image_config = image.config.as_ref();
 
                     let entrypoint = image_config.unwrap().entrypoint.clone();
 
-                    if entrypoint.is_none(){
-                        return
+                    if entrypoint.is_none() {
+                        return;
                     }
 
-                    if container_config.cmd.is_none(){
-                        if !image_config.unwrap().cmd.is_none(){
+                    if container_config.cmd.is_none() {
+                        if !image_config.unwrap().cmd.is_none() {
                             command.extend(image_config.unwrap().cmd.as_ref().unwrap().clone());
                         }
-                    }
-
-                    else if container_config.cmd.as_ref().unwrap().len() == 0{
-                        if !image_config.unwrap().cmd.is_none(){
+                    } else if container_config.cmd.as_ref().unwrap().len() == 0 {
+                        if !image_config.unwrap().cmd.is_none() {
                             command.extend(image_config.unwrap().cmd.as_ref().unwrap().clone());
                         }
-                    }else{
+                    } else {
                         command.extend(container_config.cmd.as_ref().unwrap().clone());
                     }
-                    
-                    for string in entrypoint.unwrap(){
-                        command_string = format!("{} {}",command_string,string);
-                    }
-                    for string in command{
-                        command_string = format!("{} {}",command_string,string);
-                    }
-                    
 
-                    
-                },
+                    for string in entrypoint.unwrap() {
+                        command_string = format!("{} {}", command_string, string);
+                    }
+                    for string in command {
+                        command_string = format!("{} {}", command_string, string);
+                    }
+                }
                 Err(e) => eprintln!("Error in command string: {}", e),
             }
-        },
+        }
         Err(e) => eprintln!("Error in command_string: {}", e),
     };
 
@@ -123,18 +119,45 @@ pub async fn get_command_string(id:String){
 }
 
 //Kill every process in the namespace of the container
-pub fn stop_experiment(pid:u32,code:u32){
+pub fn stop_experiment(pid: u32, code: u32) {
     //If it is a kill
-    if code==3{
-        Popen::create(&["nsenter", "-t", &pid.to_string(),"-p","-m","/bin/sh","-c","kill -9 -1"], PopenConfig {
-            stdout: Redirection::Pipe, ..Default::default()
-        }).unwrap();
+    if code == 3 {
+        Popen::create(
+            &[
+                "nsenter",
+                "-t",
+                &pid.to_string(),
+                "-p",
+                "-m",
+                "/bin/sh",
+                "-c",
+                "kill -9 -1",
+            ],
+            PopenConfig {
+                stdout: Redirection::Pipe,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
     //If it is a leave
-    if code==2{
-        Popen::create(&["nsenter", "-t", &pid.to_string(),"-p","-m","/bin/sh","-c","kill -2 -1"], PopenConfig {
-            stdout: Redirection::Pipe, ..Default::default()
-        }).unwrap();
+    if code == 2 {
+        Popen::create(
+            &[
+                "nsenter",
+                "-t",
+                &pid.to_string(),
+                "-p",
+                "-m",
+                "/bin/sh",
+                "-c",
+                "kill -2 -1",
+            ],
+            PopenConfig {
+                stdout: Redirection::Pipe,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
-
 }
