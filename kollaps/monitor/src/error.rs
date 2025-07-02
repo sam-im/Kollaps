@@ -23,4 +23,6 @@ pub enum MonitorError {
     AyaPerfBuffer(#[from] PerfBufferError),
     #[error("failed to send as the rx is dropped")]
     TokioSend(#[from] SendError<Message>),
+    #[error("failed to create raw socket")]
+    RawSocket,
 }
