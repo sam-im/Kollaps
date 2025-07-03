@@ -1,4 +1,4 @@
-//! This library contains the userspace part for the monitor* crates.
+//! This library contains the userspace part of the monitor* crates.
 //!
 //! # Usage
 //! Call the `run` function to receive an `EbpfHandle` struct which

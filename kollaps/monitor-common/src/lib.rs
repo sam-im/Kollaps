@@ -1,5 +1,5 @@
-//! This library crate contains the shared data structures for both monitor-*
-//! and it's consumers.
+//! This crate contains the shared data structures for both
+//! the monitor-* crates and it's consumers.
 
 #![no_std]
 

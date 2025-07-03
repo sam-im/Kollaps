@@ -26,13 +26,3 @@ default-members = [
 [profile.release.package.monitor-ebpf]
 debug = 2
 codegen-units = 1
-
-# TODO
-# - Write docs for required packages to compile the rust side
-#   As of writing this, they are:
-#   - for monitor (that depends on aya-rs):
-#     - rust nightly toolchain: `rustup toolchain install nightly --component rust-src`
-#     - bpftool: `apt install bpftool llvm-14-dev libclang-14-dev libpolly-14-dev pkg-config libssl-dev`
-#     - bpf-linker: `cargo install bpf-linker`
-#   - for capnp-schemas crate (depend on capnp):
-#     - Debian: `apt install capnproto`

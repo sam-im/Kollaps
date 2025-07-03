@@ -1,5 +1,5 @@
-//! This binary crate contains the eBPF part for [https://docs.rs/aya/latest/aya/](aya).
-//! It is compiled by the `monitor` crate's build file.
+//! This crate contains the eBPF program part of monitor crates.
+//! It is compiled by the `monitor` crate's `build.rs` file.
 //! Trying to compile this by itself will fail.
 
 #![no_std]
