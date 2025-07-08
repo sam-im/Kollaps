@@ -18,9 +18,9 @@ use crate::elements::{Flowu16, Link, Path, Service};
 use rand::Rng;
 use std::collections::HashMap;
 use std::f32::INFINITY;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{self, Duration};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info};
 
 //Graph of the current network state
@@ -91,7 +91,7 @@ impl Graph {
         }
     }
 
-    pub fn insert_service(
+    pub async fn insert_service(
         &mut self,
         hostname: String,
         shared: bool,
@@ -123,7 +123,7 @@ impl Graph {
         if ip.is_none() {
             return;
         } else {
-            service_locked.lock().unwrap().ip = ip.unwrap();
+            service_locked.lock().await.ip = ip.unwrap();
             self.services.insert(ip.unwrap(), service_locked);
         }
     }
@@ -171,11 +171,11 @@ impl Graph {
         }
     }
 
-    pub fn set_dashboard(&mut self, name: String, supervisor_port: u32) {
+    pub async fn set_dashboard(&mut self, name: String, supervisor_port: u32) {
         match self.services_by_name.get_mut(&name) {
             Some(services) => {
-                services[services.len() - 1].lock().unwrap().supervisor = true;
-                services[services.len() - 1].lock().unwrap().supervisor_port = supervisor_port;
+                services[services.len() - 1].lock().await.supervisor = true;
+                services[services.len() - 1].lock().await.supervisor_port = supervisor_port;
             }
             None => {
                 error!(
@@ -186,7 +186,7 @@ impl Graph {
         }
     }
 
-    pub fn insert_link(
+    pub async fn insert_link(
         &mut self,
         latency: f32,
         jitter: f32,
@@ -212,7 +212,7 @@ impl Graph {
                     destination_node.clone(),
                 );
                 let link = Arc::new(Mutex::new(link));
-                source_node.lock().unwrap().attach_link(id);
+                source_node.lock().await.attach_link(id);
                 self.links.insert(id, link);
                 self.link_counter += 1;
             }
@@ -275,7 +275,7 @@ impl Graph {
         }
     }
 
-    pub fn print_graph(&mut self, name: String) {
+    pub async fn print_graph(&mut self, name: String) {
         //     for (name, services) in &self.services_by_name {
         //         for service in services{
         //             let service = service.lock().unwrap();
@@ -294,7 +294,7 @@ impl Graph {
         // }
 
         for (_id, path) in &self.paths {
-            path.lock().unwrap().print(&name);
+            path.lock().await.print(&name);
         }
 
         //     for (ip, id) in &self.ip_to_path_id {
@@ -307,25 +307,25 @@ impl Graph {
     }
 
     //gets the last amount of bytes sent to an ip
-    pub fn get_lastbytes(&self, ip: &u32) -> u32 {
+    pub async fn get_lastbytes(&self, ip: &u32) -> u32 {
         match self.services.get(ip) {
-            Some(service) => return service.lock().unwrap().last_bytes,
+            Some(service) => return service.lock().await.last_bytes,
             None => 0,
         }
     }
 
     //sets the last amount of bytes sent to an ip
-    pub fn set_lastbytes(&mut self, ip: &u32, last_bytes: u32) {
+    pub async fn set_lastbytes(&mut self, ip: &u32, last_bytes: u32) {
         match self.services.get_mut(ip) {
-            Some(service) => service.lock().unwrap().last_bytes = last_bytes,
+            Some(service) => service.lock().await.last_bytes = last_bytes,
             None => (),
         }
     }
 
     //creates a graph from an older graph
-    pub fn create_from_graph(&mut self, old_graph: Arc<Mutex<Graph>>) {
-        for (ip, service) in old_graph.lock().unwrap().services.iter() {
-            let hostname = service.lock().unwrap().hostname.clone();
+    pub async fn create_from_graph(&mut self, old_graph: Arc<Mutex<Graph>>) {
+        for (ip, service) in old_graph.lock().await.services.iter() {
+            let hostname = service.lock().await.hostname.clone();
 
             match self.services_by_name.get_mut(&hostname) {
                 Some(services) => services.push(Arc::clone(&service)),
@@ -339,8 +339,8 @@ impl Graph {
             self.services.insert(*ip, service.clone());
         }
 
-        for (ip, bridge) in old_graph.lock().unwrap().bridges.iter() {
-            let hostname = bridge.lock().unwrap().hostname.clone();
+        for (ip, bridge) in old_graph.lock().await.bridges.iter() {
+            let hostname = bridge.lock().await.hostname.clone();
 
             match self.bridges_by_name.get_mut(&hostname.to_string()) {
                 Some(bridges) => bridges.push(Arc::clone(&bridge)),
@@ -355,12 +355,12 @@ impl Graph {
             self.bridges.insert(*ip, bridge.clone());
         }
 
-        self.removed_links = old_graph.lock().unwrap().removed_links.clone();
+        self.removed_links = old_graph.lock().await.removed_links.clone();
 
-        self.removed_bridges = old_graph.lock().unwrap().removed_bridges.clone();
+        self.removed_bridges = old_graph.lock().await.removed_bridges.clone();
 
-        for (_id, link) in old_graph.lock().unwrap().links.iter() {
-            let link = link.lock().unwrap();
+        for (_id, link) in old_graph.lock().await.links.iter() {
+            let link = link.lock().await;
             let id = link.id;
 
             let latency = link.latency;
@@ -382,7 +382,7 @@ impl Graph {
         }
 
         for link in self.removed_links.iter() {
-            let link = link.lock().unwrap();
+            let link = link.lock().await;
 
             let id = link.id;
 
@@ -404,28 +404,28 @@ impl Graph {
             self.links.insert(id, link);
         }
 
-        self.link_counter = old_graph.lock().unwrap().link_counter.clone();
+        self.link_counter = old_graph.lock().await.link_counter.clone();
 
-        self.graph_root = old_graph.lock().unwrap().graph_root.clone();
+        self.graph_root = old_graph.lock().await.graph_root.clone();
     }
 
-    pub fn calculate_properties(&mut self) {
+    pub async fn calculate_properties(&mut self) {
         for (id, _path) in self.paths.clone() {
-            self.calculate_end_to_end_properties(id);
+            self.calculate_end_to_end_properties(id).await;
         }
     }
 
-    pub fn calculate_end_to_end_properties(&mut self, id: u32) {
+    pub async fn calculate_end_to_end_properties(&mut self, id: u32) {
         let mut total_not_drop_probability = 1.0;
 
         match self.paths.get_mut(&id) {
             Some(path) => {
-                let mut path = path.lock().unwrap();
+                let mut path = path.lock().await;
 
                 for link in path.links.clone() {
                     match self.links.get(&link) {
                         Some(link_object) => {
-                            let link_object = link_object.lock().unwrap();
+                            let link_object = link_object.lock().await;
 
                             //confusing in python
                             if path.max_bandwidth == 0.0 {
@@ -458,7 +458,7 @@ impl Graph {
     }
 
     //Processes usages received from eBPF
-    pub fn process_usage(&mut self, ip: u32, throughput: f32) -> bool {
+    pub async fn process_usage(&mut self, ip: u32, throughput: f32) -> bool {
         let errormargin = 0.01;
         let path_id = match self.ip_to_path_id.get_mut(&ip) {
             Some(path_id) => path_id,
@@ -470,14 +470,14 @@ impl Graph {
             None => return false, //error
         };
 
-        let path_max_bandwidth = path.lock().unwrap().max_bandwidth.clone();
+        let path_max_bandwidth = path.lock().await.max_bandwidth.clone();
 
         if throughput <= (path_max_bandwidth * errormargin) {
-            path.lock().unwrap().used_bandwidth = throughput;
+            path.lock().await.used_bandwidth = throughput;
             return false;
         }
 
-        path.lock().unwrap().used_bandwidth = throughput;
+        path.lock().await.used_bandwidth = throughput;
 
         return true;
     }
@@ -488,7 +488,7 @@ impl Graph {
 
         match self.flow_accumulator_u16.get_mut(&key) {
             Some(flow) => {
-                let mut flow = flow.lock().unwrap();
+                let mut flow = flow.blocking_lock();
                 flow.bandwidth = bandwidth;
                 flow.age = 0;
             }
@@ -503,7 +503,7 @@ impl Graph {
     }
 
     //get ips of containers
-    pub fn resolve_hostnames_docker(&mut self) {
+    pub async fn resolve_hostnames_docker(&mut self) {
         use hickory_client::client::{Client, ClientHandle};
         use hickory_client::proto::{
             rr::{DNSClass, Name, RecordType},
@@ -515,10 +515,8 @@ impl Graph {
             net::{IpAddr, Ipv4Addr, SocketAddr},
             str::FromStr,
         };
-        use tokio::runtime::Runtime;
 
-        let sleeptime = time::Duration::from_millis(500);
-        let rt = Runtime::new().expect("failed to build tokio runtime");
+        let sleeptime = Duration::from_millis(500);
         let (stream, sender) = TcpClientStream::new(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 11)), 53),
             None,
@@ -527,8 +525,8 @@ impl Graph {
         );
         let client = Client::new(stream, sender, None);
 
-        let (mut client, bg) = rt.block_on(async { client.await.expect("connection failed") });
-        rt.spawn(bg);
+        let (mut client, bg) = client.await.expect("connection failed");
+        let bg_handle = tokio::spawn(bg);
 
         for (name, services) in self.services_by_name.iter_mut() {
             let mut ips: Vec<Ipv4Addr>;
@@ -547,7 +545,7 @@ impl Graph {
                     RecordType::A,
                 );
 
-                let response = rt.block_on(async { query.await });
+                let response = query.await;
 
                 match response {
                     Ok(res) => {
@@ -565,8 +563,8 @@ impl Graph {
                             .for_each(|ipv4| ips.push(ipv4));
                     }
                     Err(e) => {
-                        println!("Error: {}", e);
-                        thread::sleep(sleeptime);
+                        error!("Error: {}", e);
+                        sleep(sleeptime).await;
                     }
                 };
                 info!(
@@ -579,23 +577,24 @@ impl Graph {
                 if ips.len() == services.len() {
                     break;
                 }
-                thread::sleep(sleeptime);
+                sleep(sleeptime).await;
             }
             ips.sort();
 
             for (i, service) in services.iter().enumerate() {
                 let int_ip = convert_to_int(ips[i].octets());
-                service.lock().unwrap().ip = int_ip;
-                service.lock().unwrap().replica_id = i;
+                service.lock().await.ip = int_ip;
+                service.lock().await.replica_id = i;
                 self.services.insert(int_ip, Arc::clone(service));
                 self.ips.push(int_ip);
             }
         }
+        bg_handle.abort();
     }
 
-    pub fn set_graph_root(&mut self) {
+    pub async fn set_graph_root(&mut self) {
         loop {
-            thread::sleep(Duration::from_secs(1));
+            sleep(Duration::from_secs(1)).await;
             let ip = get_own_ip(None);
 
             match self.services.get_mut(&ip) {
@@ -608,10 +607,9 @@ impl Graph {
         }
     }
 
-    pub fn set_graph_root_baremetal(&mut self, networkdevice: String) {
+    pub async fn set_graph_root_baremetal(&mut self, networkdevice: String) {
         loop {
-            let sleeptime = time::Duration::from_millis(1000);
-            thread::sleep(sleeptime);
+            sleep(Duration::from_secs(1)).await;
             let ip = get_own_ip(Some(networkdevice.clone()));
             let root = self.services.get_mut(&ip);
 
@@ -625,13 +623,13 @@ impl Graph {
         }
     }
 
-    pub fn get_name(&mut self) -> String {
+    pub async fn get_name(&mut self) -> String {
         let name = self
             .graph_root
             .as_ref()
             .unwrap()
             .lock()
-            .unwrap()
+            .await
             .hostname
             .clone()
             .to_string();
@@ -639,7 +637,7 @@ impl Graph {
         return name.clone();
     }
 
-    pub fn calculate_shortest_paths(&mut self) {
+    pub async fn calculate_shortest_paths(&mut self) {
         if self.graph_root.is_none() {
             debug!("EC {} - graph root is none", self.name);
         }
@@ -650,11 +648,11 @@ impl Graph {
 
         let mut q = vec![];
 
-        let root_ip = self.graph_root.as_ref().unwrap().lock().unwrap().ip;
+        let root_ip = self.graph_root.as_ref().unwrap().lock().await.ip;
 
         for (_name, services) in self.services_by_name.iter_mut() {
             for service in services {
-                let s = service.lock().unwrap();
+                let s = service.lock().await;
                 if s.supervisor {
                     info!("EC {} - skipped dashboard in paths", self.name);
                     continue;
@@ -673,7 +671,7 @@ impl Graph {
         }
 
         for (_name, bridges) in self.bridges_by_name.iter_mut() {
-            dist.insert(bridges[0].lock().unwrap().ip.clone(), inf);
+            dist.insert(bridges[0].lock().await.ip.clone(), inf);
 
             let entry = Dijkstraentry::new(inf, bridges[0].clone());
             q.push(entry);
@@ -693,18 +691,18 @@ impl Graph {
 
             let node = q.remove(0).node.clone();
 
-            let links = node.lock().unwrap().links.clone();
+            let links = node.lock().await.links.clone();
 
             let mut alt;
 
             for link in links {
-                let node_ip = node.lock().unwrap().ip;
+                let node_ip = node.lock().await.ip;
 
                 alt = dist.get(&node_ip).unwrap() + 1.0;
 
                 let link_object = self.links.get_mut(&link).unwrap().clone();
 
-                let destination_ip = link_object.lock().unwrap().destination.lock().unwrap().ip;
+                let destination_ip = link_object.lock().await.destination.lock().await.ip;
 
                 if !dist.contains_key(&destination_ip) {
                     continue;
@@ -720,7 +718,7 @@ impl Graph {
                         .get_mut(&path_id)
                         .unwrap()
                         .lock()
-                        .unwrap()
+                        .await
                         .links
                         .clone();
 
@@ -734,7 +732,7 @@ impl Graph {
                     self.path_counter += 1;
 
                     for i in 0..q.len() {
-                        if q[i].node.lock().unwrap().ip == destination_ip {
+                        if q[i].node.lock().await.ip == destination_ip {
                             q[i].distance = alt;
                         }
                     }
@@ -742,10 +740,10 @@ impl Graph {
             }
         }
 
-        self.set_start_and_finish();
+        self.set_start_and_finish().await;
     }
 
-    pub fn calculate_shortest_paths_latency(&mut self) {
+    pub async fn calculate_shortest_paths_latency(&mut self) {
         if self.graph_root.is_none() {
             debug!("EC {} - graph root is none", self.name);
         }
@@ -756,11 +754,11 @@ impl Graph {
 
         let mut q = vec![];
 
-        let root_ip = self.graph_root.as_ref().unwrap().lock().unwrap().ip;
+        let root_ip = self.graph_root.as_ref().unwrap().lock().await.ip;
 
         for (_name, services) in self.services_by_name.iter_mut() {
             for service in services {
-                let s = service.lock().unwrap();
+                let s = service.lock().await;
                 let mut distance = 0.0;
 
                 if s.ip != root_ip {
@@ -774,7 +772,7 @@ impl Graph {
         }
 
         for (_name, bridges) in self.bridges_by_name.iter_mut() {
-            dist.insert(bridges[0].lock().unwrap().ip.clone(), inf);
+            dist.insert(bridges[0].lock().await.ip.clone(), inf);
 
             let entry = Dijkstraentry::new(inf, bridges[0].clone());
             q.push(entry);
@@ -794,21 +792,21 @@ impl Graph {
 
             let node = q.remove(0).node.clone();
 
-            let links = node.lock().unwrap().links.clone();
+            let links = node.lock().await.links.clone();
 
             let mut alt;
 
             for link in links {
-                let node_ip = node.lock().unwrap().ip;
+                let node_ip = node.lock().await.ip;
 
                 let link_object = self.links.get_mut(&link).unwrap().clone();
 
                 let latency;
                 let destination_ip;
                 {
-                    let l = link_object.lock().unwrap();
+                    let l = link_object.lock().await;
                     latency = l.latency;
-                    destination_ip = l.destination.lock().unwrap().ip;
+                    destination_ip = l.destination.lock().await.ip;
                 }
 
                 alt = dist.get(&node_ip).unwrap() + latency;
@@ -826,7 +824,7 @@ impl Graph {
                         .get_mut(&path_id)
                         .unwrap()
                         .lock()
-                        .unwrap()
+                        .await
                         .links
                         .clone();
 
@@ -840,7 +838,7 @@ impl Graph {
                     self.path_counter += 1;
 
                     for i in 0..q.len().clone() {
-                        if q[i].node.lock().unwrap().ip == destination_ip {
+                        if q[i].node.lock().await.ip == destination_ip {
                             q[i].distance = alt;
                         }
                     }
@@ -848,12 +846,12 @@ impl Graph {
             }
         }
 
-        self.set_start_and_finish();
+        self.set_start_and_finish().await;
     }
 
-    pub fn set_start_and_finish(&mut self) {
+    pub async fn set_start_and_finish(&mut self) {
         for (_id, path) in self.paths.iter_mut() {
-            let mut p = path.lock().unwrap();
+            let mut p = path.lock().await;
             if p.links.is_empty() {
                 continue;
             }
@@ -866,19 +864,19 @@ impl Graph {
 
             let source_name = source_link
                 .lock()
-                .unwrap()
+                .await
                 .source
                 .lock()
-                .unwrap()
+                .await
                 .hostname
                 .clone();
 
             let destination_name = destination_link
                 .lock()
-                .unwrap()
+                .await
                 .destination
                 .lock()
-                .unwrap()
+                .await
                 .hostname
                 .clone();
 

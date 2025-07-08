@@ -15,12 +15,13 @@
 
 use crate::elements::Service;
 use std::process;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time;
 use subprocess::Popen;
 use subprocess::PopenConfig;
 use subprocess::Redirection;
+use tokio::sync::Mutex;
 use tracing::{error, info};
 
 pub fn convert_to_int(octets: [u8; 4]) -> u32 {

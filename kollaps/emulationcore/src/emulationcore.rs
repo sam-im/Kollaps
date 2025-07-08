@@ -1,7 +1,5 @@
-use capnp::message::{Builder, HeapAllocator};
-use capnp_schemas::message_capnp;
 use monitor;
-use tracing::{debug, error, info};
+use tracing::{error, info, warn};
 
 use crate::aux::convert_to_int;
 use crate::aux::{get_own_ip, print_message};
@@ -20,21 +18,16 @@ use roxmltree::Document;
 use std::collections::HashMap;
 use std::env;
 use std::fs::OpenOptions;
-use std::io;
-use std::io::Read;
 use std::io::Write;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
-use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::Arc;
 use std::time;
 use std::time::{Duration, Instant};
 use subprocess::Popen;
 use subprocess::PopenConfig;
-use tokio::runtime;
-use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -44,7 +37,7 @@ pub struct EmulationCore {
     name: String,
     state: Arc<Mutex<State>>,
     pid: u32,
-    comms: Arc<Mutex<Communication>>,
+    comms: Communication,
     lasttime: Option<Instant>,
     usages: Arc<Mutex<HashMap<u32, u32>>>,
     link_count: u32,
@@ -67,19 +60,15 @@ impl EmulationCore {
             state.clone(),
             orchestrator.clone(),
         )));
-        let mut communication = Communication::new(id.clone());
+        let communication = Communication::new(id.clone());
 
-        //If it is baremetal we can not start pipes here because they block waiting for CM
-        if orchestrator != "baremetal" {
-            communication.init();
-        }
         EmulationCore {
-            id: id.clone(),
+            id: id,
             ip: 0,
             name: "".to_string(),
             state: state,
             pid: pid,
-            comms: Arc::new(Mutex::new(communication)),
+            comms: communication,
             lasttime: None,
             usages: Arc::new(Mutex::new(HashMap::new())),
             pool_period: 0.05,
@@ -108,12 +97,12 @@ impl EmulationCore {
         self.networkdevice = networkdevice;
     }
 
-    pub fn init_baremetal(&mut self) {
+    pub async fn init_baremetal(&mut self) {
         print_message(self.name.clone(), "STARTED BOOTSTRAPPING EC".to_string());
 
         //Create the initial graph
-        self.state.lock().unwrap().insert_graph();
-        self.state.lock().unwrap().name = self.name.clone();
+        self.state.lock().await.insert_graph().await;
+        self.state.lock().await.name = self.name.clone();
 
         let mut parser = XMLGraphParser::new(self.state.clone(), "baremetal".to_string());
 
@@ -124,7 +113,7 @@ impl EmulationCore {
         let root = doc.root().first_child().unwrap();
 
         //Parses topology
-        parser.fill_graph(root.clone());
+        parser.fill_graph(root.clone()).await;
 
         //Collect config properties
 
@@ -137,10 +126,10 @@ impl EmulationCore {
         let service_count = self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .services
             .keys()
             .len();
@@ -152,39 +141,40 @@ impl EmulationCore {
         self.id = self.ip.to_string();
 
         //Start the CM process
-        let process = self.start_cm(service_count);
+        let process = self.start_cm(service_count).await;
 
         //Graph related operation
         self.state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
-            .set_graph_root_baremetal(self.networkdevice.clone());
+            .await
+            .set_graph_root_baremetal(self.networkdevice.clone())
+            .await;
 
-        self.calculate_paths();
+        self.calculate_paths().await;
 
         //Parse dynamic events
 
-        self.scheduler.lock().unwrap().shortest_path_type = self.shortest_path_type.clone();
+        self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
 
-        parser.parse_schedule(self.scheduler.clone(), root);
-        self.scheduler.lock().unwrap().sort_events();
-        self.scheduler.lock().unwrap().pid = self.pid;
+        parser.parse_schedule(self.scheduler.clone(), root).await;
+        self.scheduler.lock().await.sort_events();
+        self.scheduler.lock().await.pid = self.pid;
 
-        self.scheduler.lock().unwrap().script = self
+        self.scheduler.lock().await.script = self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .graph_root
             .as_ref()
             .unwrap()
             .lock()
-            .unwrap()
+            .await
             .script
             .clone();
 
@@ -192,166 +182,153 @@ impl EmulationCore {
         let removed_links_len = self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .removed_links
             .len();
         self.link_count = (self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .links
             .keys()
             .len()
             + removed_links_len) as u32;
-        self.state.lock().unwrap().set_link_count(self.link_count);
+        self.state
+            .lock()
+            .await
+            .set_link_count(self.link_count)
+            .await;
 
         print_message(self.name.clone(), "STARTING TC".to_string());
         self.state
             .lock()
-            .unwrap()
+            .await
             .init(self.ip)
+            .await
             .map_err(|err| println!("{:?}", err))
             .ok();
 
-        {
-            let mut comms = self.comms.lock().unwrap();
-            comms.ip = self.ip;
-            comms.id = self.ip.to_string();
-            comms.init();
-            comms.start_polling(self.state.clone());
-        }
+        self.comms.init(self.state.clone()).await;
 
         //create variables to send to thread
         let scheduler = self.scheduler.clone();
         let shutdown = self.shutdown.clone();
 
-        thread::spawn(move || {
-            accept_loop_baremetal(scheduler, shutdown, Arc::new(Mutex::new(process)))
+        tokio::spawn(async move {
+            accept_loop_baremetal(scheduler, shutdown, Arc::new(Mutex::new(process))).await
         });
     }
 
-    pub fn init(&mut self) {
+    pub async fn init(&mut self) {
         //Parse the topology
-        self.state.lock().unwrap().insert_graph();
+        self.state.lock().await.insert_graph().await;
 
         let mut parser = XMLGraphParser::new(self.state.clone(), "container".to_string());
         let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
         let doc = Document::parse(&text).unwrap();
         let root = doc.root().first_child().unwrap();
-        parser.fill_graph(root.clone());
+        parser.fill_graph(root.clone()).await;
 
         //Collect config properties
         self.shortest_path_type = parser.shortest_path_type.to_string();
         self.pool_period = parser.pool_period;
         self.max_age = parser.max_age;
 
-        thread::sleep(Duration::from_secs(2));
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         //Get ips of all containers
         info!("EC {} - retrieving container IPs", self.name);
         if self.orchestrator == "docker" {
             self.state
                 .lock()
-                .unwrap()
+                .await
                 .get_current_graph()
                 .lock()
-                .unwrap()
-                .resolve_hostnames_docker();
+                .await
+                .resolve_hostnames_docker()
+                .await
         } else {
-            //Need new runtime because kubernetes library uses block_on
-            let basic_rt = runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .unwrap();
-            let graph = self.state.lock().unwrap().get_current_graph().clone();
-            basic_rt
-                .block_on(async { resolve_hostnames_kubernetes(graph).await })
-                .map_err(|err| println!("{:?}", err))
-                .ok();
+            let graph = self.state.lock().await.get_current_graph().clone();
+            let _ = resolve_hostnames_kubernetes(graph).await;
         }
         info!("EC {}: retrieved container IPs", self.name);
 
         self.state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
-            .set_graph_root();
-        self.calculate_paths();
+            .await
+            .set_graph_root()
+            .await;
+        self.calculate_paths().await;
 
         //Set name for debug
-        self.scheduler.lock().unwrap().name = self.name.clone();
-        self.scheduler.lock().unwrap().shortest_path_type = self.shortest_path_type.clone();
-        self.state.lock().unwrap().emulation.lock().unwrap().name = self.name.clone();
+        self.scheduler.lock().await.name = self.name.clone();
+        self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
 
         //Parse dynamic events
-        parser.parse_schedule(self.scheduler.clone(), root.clone());
-        self.scheduler.lock().unwrap().sort_events();
-        self.state.lock().unwrap().shrink_maps();
-        self.scheduler.lock().unwrap().pid = self.pid;
+        parser
+            .parse_schedule(self.scheduler.clone(), root.clone())
+            .await;
+        self.scheduler.lock().await.sort_events();
+        self.state.lock().await.shrink_maps().await;
+        self.scheduler.lock().await.pid = self.pid;
 
         //Get how many links we have in the experiment if >255 use u16 else u8
         let removed_links_len = self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .removed_links
             .len();
         let links_len = self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .links
             .keys()
             .len();
         self.link_count = (links_len + removed_links_len) as u32;
 
         //Start communication
-        self.comms.lock().unwrap().start_polling(self.state.clone());
+        self.comms.init(self.state.clone()).await;
 
-        self.state.lock().unwrap().set_link_count(self.link_count);
-
-        let pid = self.pid.clone();
-
-        let scheduler = self.scheduler.clone();
-
-        let start = self.start.clone();
-
-        let shutdown = self.shutdown.clone();
+        self.state
+            .lock()
+            .await
+            .set_link_count(self.link_count)
+            .await;
 
         self.ip = get_own_ip(None);
 
         //Start TC structures
         self.state
             .lock()
-            .unwrap()
+            .await
             .init(self.ip)
+            .await
             .map_err(|e| error!("{:?}", e))
             .ok();
 
-        {
-            let mut comms = self.comms.lock().unwrap();
-            comms.ip = self.ip.clone();
-            comms.name = self.name.clone();
-        }
+        let pid = self.pid.clone();
+        let scheduler = self.scheduler.clone();
+        let start = self.start.clone();
+        let shutdown = self.shutdown.clone();
 
-        //self.state.lock().unwrap().get_current_graph().lock().unwrap().print_graph(self.name.clone());
-
-        thread::spawn(move || accept_loop(scheduler, pid, start, shutdown));
+        tokio::spawn(async move { accept_loop(scheduler, pid, start, shutdown).await });
 
         info!(
             self.pool_period,
@@ -363,7 +340,7 @@ impl EmulationCore {
         );
     }
 
-    pub fn start_cm(&mut self, service_count: usize) -> Popen {
+    pub async fn start_cm(&mut self, service_count: usize) -> Popen {
         //Create auxiliary files, CM reads from these files, dashboard is not relevant we just create an empty file
         OpenOptions::new()
             .write(true)
@@ -389,10 +366,10 @@ impl EmulationCore {
         for (ip, _) in self
             .state
             .lock()
-            .unwrap()
+            .await
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .services
             .iter()
         {
@@ -420,20 +397,20 @@ impl EmulationCore {
         return process;
     }
 
-    pub fn calculate_paths(&mut self) {
-        let mut _current_graph = self.state.lock().unwrap().get_current_graph();
-        let mut current_graph = _current_graph.lock().unwrap();
+    pub async fn calculate_paths(&mut self) {
+        let mut _current_graph = self.state.lock().await.get_current_graph();
+        let mut current_graph = _current_graph.lock().await;
 
         if self.shortest_path_type.eq("hop") {
-            current_graph.calculate_shortest_paths();
+            current_graph.calculate_shortest_paths().await;
         }
         if self.shortest_path_type.eq("latency") {
-            current_graph.calculate_shortest_paths_latency();
+            current_graph.calculate_shortest_paths_latency().await;
         }
 
-        current_graph.calculate_properties();
-        self.name = current_graph.get_name();
-        self.state.lock().unwrap().name = self.name.clone();
+        current_graph.calculate_properties().await;
+        self.name = current_graph.get_name().await;
+        self.state.lock().await.name = self.name.clone();
     }
 
     pub async fn setup_ebpf(&mut self) {
@@ -444,20 +421,16 @@ impl EmulationCore {
     pub async fn emulation_loop(&mut self) {
         self.setup_ebpf().await;
 
-        let handle = Handle::current();
-        self.scheduler.lock().unwrap().tokiohandler = Some(handle);
         self.lasttime = Some(Instant::now());
-        self.check_active_flows();
+        self.check_active_flows().await;
 
         loop {
-            //wait for the experiment to start, not relevant if not debugging
-            if *self.shutdown.lock().unwrap() {
+            if *self.shutdown.lock().await {
                 info!("EC {} Shutdown", self.name);
                 break;
             }
-            if !*self.start.lock().unwrap() {
-                let sleeptime = 0.0001;
-                thread::sleep(Duration::from_secs_f32(sleeptime));
+            if !*self.start.lock().await {
+                tokio::time::sleep(Duration::from_secs_f32(0.0001)).await;
                 continue;
             }
 
@@ -465,30 +438,30 @@ impl EmulationCore {
                 self.pool_period - (self.lasttime.unwrap().elapsed().as_millis() as f32) / 1000.0;
 
             if sleeptime > 0.0 {
-                thread::sleep(Duration::from_secs_f32(sleeptime));
+                tokio::time::sleep(Duration::from_secs_f32(sleeptime)).await;
             }
 
-            self.state.lock().unwrap().clear_paths();
+            self.state.lock().await.clear_paths();
 
-            self.check_active_flows();
+            self.check_active_flows().await;
 
-            self.broadcast_flows();
+            self.broadcast_flows().await;
 
-            self.state.lock().unwrap().calculate_bandwidth();
+            self.state.lock().await.calculate_bandwidth().await;
         }
     }
 
     //Read from local usages map
-    fn check_active_flows(&mut self) {
-        let usages = self.usages.lock().unwrap().clone();
+    async fn check_active_flows(&mut self) {
+        let usages = self.usages.lock().await.clone();
 
         for (ip, bytes) in usages.iter() {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().await;
             let current_graph_handle = state.get_current_graph();
-            let mut current_graph = current_graph_handle.lock().unwrap();
+            let mut current_graph = current_graph_handle.lock().await;
 
-            let last_bytes = current_graph.get_lastbytes(&ip);
-            current_graph.set_lastbytes(&ip, *bytes);
+            let last_bytes = current_graph.get_lastbytes(&ip).await;
+            current_graph.set_lastbytes(&ip, *bytes).await;
 
             let delta_bytes;
             if last_bytes > *bytes {
@@ -504,13 +477,13 @@ impl EmulationCore {
             let bits = delta_bytes * 8;
             let throughput = bits as f32 / (delta_time / 1000.0);
 
-            let useful = current_graph.process_usage(*ip, throughput);
+            let useful = current_graph.process_usage(*ip, throughput).await;
 
-            // insert_active_path_id(...) also locks current_graph
+            // insert_active_path_id(...) below also requires a lock on current_graph
             drop(current_graph);
 
             if useful {
-                state.insert_active_path_id(*ip);
+                state.insert_active_path_id(*ip).await;
                 //print_message(self.name.clone(),format!("throughput is {}",throughput.clone()));
             }
         }
@@ -518,45 +491,21 @@ impl EmulationCore {
     }
 
     //Sends metadata to CM
-    fn broadcast_flows(&mut self) {
-        //Retrieve paths the node sent bytes to
-        let active_paths = self.state.lock().unwrap().get_active_paths().clone();
+    async fn broadcast_flows(&mut self) {
+        use crate::communication::PathFlowData;
+
+        let active_paths = self.state.lock().await.get_active_paths().await.clone();
 
         if !(active_paths.is_empty()) {
-            let mut comms = self.comms.lock().unwrap();
-            let mut message: Builder<HeapAllocator> = Builder::new_default();
-            let mut msg: message_capnp::message::Builder<'_> =
-                message.init_root::<message_capnp::message::Builder>();
-
-            comms.init_message(
-                msg.reborrow(),
-                self.state.lock().unwrap().ec_cycle as u32,
-                active_paths.len() as u32,
-            );
-
-            let mut flow_number = 0;
-            let mut total_bw = 0;
-            for path in active_paths {
-                let path = path.lock().unwrap();
-                //TODO add bw and links)
+            let ec_cycle = self.state.lock().await.ec_cycle as u32;
+            let mut flows = Vec::new();
+            for p in active_paths {
+                let path = p.lock().await;
                 let bandwidth = path.used_bandwidth as u32;
-                total_bw = total_bw + bandwidth;
-                let len_links = path.links.len() as u32;
-
-                if len_links == 0 || len_links > 254 {
-                    error!(
-                        len_links,
-                        "EC {}: links length is 0 or bigger than 254", self.name
-                    );
-                }
-
                 let links = path.links.clone();
-
-                comms.add_flow(msg.reborrow(), bandwidth, len_links, links, flow_number);
-
-                flow_number += 1;
+                flows.push(PathFlowData { bandwidth, links });
             }
-            comms.send_message(message);
+            self.comms.send_flows(ec_cycle, flows).await;
         }
     }
 }
@@ -568,12 +517,12 @@ async fn get_local_usage(usages_handle: Arc<Mutex<HashMap<u32, u32>>>) {
     let mut ebpf_handle = monitor::run(iface).await.unwrap();
 
     while let Some(msg) = ebpf_handle.rx.recv().await {
-        usages_handle.lock().unwrap().insert(msg.dst, msg.bytes);
+        usages_handle.lock().await.insert(msg.dst, msg.bytes);
     }
 }
 
 //Waits to accept dashboard connection
-fn accept_loop(
+async fn accept_loop(
     eventscheduler: Arc<Mutex<EventScheduler>>,
     pid: u32,
     start: Arc<Mutex<bool>>,
@@ -582,58 +531,60 @@ fn accept_loop(
     info!("EC with pid {}: starting accept loop", pid);
 
     let addr = format!("0.0.0.0:{}", 7073);
-    let listener = TcpListener::bind(addr)?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    for stream in listener.incoming() {
-        receive_commands(
-            stream?,
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let _ = receive_commands(
+            stream,
             eventscheduler.clone(),
             pid,
             start.clone(),
             shutdown.clone(),
         )
-        .map_err(|e| error!("{:?}", e))
-        .ok();
+        .await
+        .map_err(|e| warn!("error while receiving command: {:?}", e));
     }
-    Ok(())
 }
 
 //Receives commands from dashboard
-fn receive_commands(
-    mut stream: TcpStream,
-    eventscheduler: Arc<Mutex<EventScheduler>>,
+async fn receive_commands(
+    mut stream: tokio::net::TcpStream,
+    eventscheduler: Arc<tokio::sync::Mutex<EventScheduler>>,
     pid: u32,
     start: Arc<Mutex<bool>>,
     shutdown: Arc<Mutex<bool>>,
 ) -> Result<()> {
-    let shutdown_command: u8 = 2;
-    let ready_command: u8 = 3;
-    let start_command: u8 = 4;
-    let ack: u8 = 120;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const SHUTDOWN_COMMAND: u8 = 2;
+    const READY_COMMAND: u8 = 3;
+    const START_COMMAND: u8 = 4;
+    const ACK: u8 = 120;
+
     let mut buf = [0; 1];
 
     loop {
-        match stream.read(&mut buf) {
-            Ok(_) => {
-                if buf[0] == shutdown_command {
-                    *shutdown.lock().unwrap() = true;
+        match stream.read_exact(&mut buf).await {
+            Ok(_) => match buf.first() {
+                Some(cmd) if SHUTDOWN_COMMAND.eq(cmd) => {
+                    *shutdown.lock().await = true;
                     stop_experiment(pid, 3);
-                    break;
                 }
-                if buf[0] == ready_command {
-                    stream.write_all(&[ack]).map_err(|e| error!("{:?}", e)).ok();
+                Some(cmd) if READY_COMMAND.eq(cmd) => {
+                    let _ = stream.write_all(&[ACK]).await.map_err(|e| warn!("{:?}", e));
                 }
-                if buf[0] == start_command {
-                    let ev = eventscheduler.clone();
-                    thread::spawn(move || start_events(ev));
-                    *start.lock().unwrap() = true;
+                Some(cmd) if START_COMMAND.eq(cmd) => {
+                    let es = eventscheduler.clone();
+                    tokio::spawn(async move { start_events(es).await });
+                    *start.lock().await = true;
                 }
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                continue;
-            }
+                Some(bytes) => warn!("Unknown bytes from stream: {:?}", bytes),
+                None => warn!("Read empty buffer from stream"),
+            },
             Err(e) => {
-                return Err(e.into());
+                warn!("error while reading from stream: {:?}", e);
+                break;
             }
         }
     }
@@ -641,12 +592,12 @@ fn receive_commands(
 }
 
 //Start the experiment
-fn start_events(eventscheduler: Arc<Mutex<EventScheduler>>) {
-    eventscheduler.lock().unwrap().start();
+async fn start_events(es_handle: Arc<Mutex<EventScheduler>>) {
+    crate::eventscheduler::start(es_handle).await;
 }
 
 pub async fn resolve_hostnames_kubernetes(graph: Arc<Mutex<Graph>>) -> Result<()> {
-    let mut services_by_name = graph.lock().unwrap().services_by_name.clone();
+    let mut services_by_name = graph.lock().await.services_by_name.clone();
     for (name, services) in services_by_name.iter_mut() {
         let mut ips: Vec<Ipv4Addr>;
         loop {
@@ -682,17 +633,16 @@ pub async fn resolve_hostnames_kubernetes(graph: Arc<Mutex<Graph>>) -> Result<()
                 break;
             }
 
-            let sleeptime = time::Duration::from_millis(1000);
-            thread::sleep(sleeptime);
+            tokio::time::sleep(time::Duration::from_secs(1)).await;
         }
         ips.sort();
         for (i, service) in services.iter().enumerate() {
             let int_ip = convert_to_int(ips[i].octets());
-            service.lock().unwrap().ip = int_ip;
-            service.lock().unwrap().replica_id = i;
+            service.lock().await.ip = int_ip;
+            service.lock().await.replica_id = i;
             graph
                 .lock()
-                .unwrap()
+                .await
                 .services
                 .insert(int_ip, Arc::clone(service));
         }
@@ -702,78 +652,73 @@ pub async fn resolve_hostnames_kubernetes(graph: Arc<Mutex<Graph>>) -> Result<()
 }
 
 //Waits to accept dashboard connection
-fn accept_loop_baremetal(
+async fn accept_loop_baremetal(
     eventscheduler: Arc<Mutex<EventScheduler>>,
     shutdown: Arc<Mutex<bool>>,
     cm_process: Arc<Mutex<Popen>>,
 ) -> Result<()> {
     let port: u32 = 7073;
-    let listener = TcpListener::bind(format!("{}{}", "0.0.0.0:", port.to_string()))?;
-    for stream in listener.incoming() {
-        receive_commands_baremetal(
-            stream?,
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", "0.0.0.0", port.to_string())).await?;
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let _ = receive_commands_baremetal(
+            stream,
             eventscheduler.clone(),
             shutdown.clone(),
             cm_process.clone(),
         )
-        .map_err(|err| println!("{:?}", err))
-        .ok();
+        .await;
     }
-    Ok(())
 }
 
 //Receives commands from dashboard
-fn receive_commands_baremetal(
-    mut stream: TcpStream,
+async fn receive_commands_baremetal(
+    mut stream: tokio::net::TcpStream,
     eventscheduler: Arc<Mutex<EventScheduler>>,
     shutdown: Arc<Mutex<bool>>,
     cm_process: Arc<Mutex<Popen>>,
 ) -> Result<()> {
-    let shutdown_command: u8 = 2;
-    let ready_command: u8 = 3;
-    let start_command: u8 = 4;
-    let ack: u8 = 120;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const SHUTDOWN_COMMAND: u8 = 2;
+    const READY_COMMAND: u8 = 3;
+    const START_COMMAND: u8 = 4;
+    const ACK: u8 = 120;
+
     let mut buf = [0; 1];
 
-    stream
-        .set_read_timeout(None)
-        .map_err(|err| println!("{:?}", err))
-        .ok();
-    stream
-        .read(&mut buf)
-        .map_err(|err| println!("{:?}", err))
-        .ok();
-    if buf[0] == shutdown_command {
-        cm_process
-            .lock()
-            .unwrap()
-            .kill()
-            .map_err(|err| println!("{:?}", err))
-            .ok();
-        print!("SHUTDOWN CM");
-        eventscheduler
-            .lock()
-            .unwrap()
-            .state
-            .lock()
-            .unwrap()
-            .emulation
-            .lock()
-            .unwrap()
-            .tear_down();
-        print!("TEARDOWN");
-        *shutdown.lock().unwrap() = true;
-        print!("SHUTDOWN FLAG ON");
-    }
-    if buf[0] == ready_command {
-        stream
-            .write_all(&[ack])
-            .map_err(|err| println!("{:?}", err))
-            .ok();
-    }
-    if buf[0] == start_command {
-        let ev = eventscheduler.clone();
-        thread::spawn(move || start_events(ev));
+    match stream.read_exact(&mut buf).await {
+        Ok(_) => match buf.first() {
+            Some(cmd) if SHUTDOWN_COMMAND.eq(cmd) => {
+                let _ = cm_process.lock().await.kill();
+                info!("Sent SIGKILL to CM process");
+                eventscheduler
+                    .lock()
+                    .await
+                    .state
+                    .lock()
+                    .await
+                    .emulation
+                    .teardown()
+                    .await;
+                info!("Called teardown() on TCAL");
+                *shutdown.lock().await = true;
+                info!("Shutdown flag enabled");
+            }
+            Some(cmd) if READY_COMMAND.eq(cmd) => {
+                let _ = stream
+                    .write_all(&[ACK])
+                    .await
+                    .map_err(|e| error!("error while writing to stream: {:?}", e));
+            }
+            Some(cmd) if START_COMMAND.eq(cmd) => {
+                tokio::spawn(async move { start_events(eventscheduler).await });
+            }
+            Some(byte) => warn!("unkown command byte: {:?}", byte),
+            None => warn!("read empty buffer from stream"),
+        },
+        Err(e) => warn!("error while reading stream: {:?}", e),
     }
 
     Ok(())

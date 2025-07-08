@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use tracing::info;
 
@@ -89,8 +90,8 @@ impl Link {
         bandwidth: f32,
         source: Arc<Mutex<Service>>,
         destination: Arc<Mutex<Service>>,
-    ) -> Link {
-        Link {
+    ) -> Self {
+        Self {
             id: id,
             bandwidth: bandwidth,
             latency: latency,
@@ -106,13 +107,13 @@ impl Link {
         self.flows.clear();
     }
 
-    pub fn print(&mut self, name: String) {
+    pub async fn print(&mut self, name: String) {
         info!(
             "Name {}: Link with id {} from {} to {} and parameters: bw {} | latency {:.} | jitter {:.1} | drop {:.1}",
             name.clone(),
             self.id,
-            self.source.lock().unwrap().hostname,
-            self.destination.lock().unwrap().hostname,
+            self.source.lock().await.hostname,
+            self.destination.lock().await.hostname,
             self.bandwidth,
             self.latency,
             self.jitter,
@@ -138,8 +139,8 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn new(id: u32, links: Vec<u16>) -> Path {
-        Path {
+    pub fn new(id: u32, links: Vec<u16>) -> Self {
+        Self {
             links: links,
             id: id,
             latency: 0.0000,

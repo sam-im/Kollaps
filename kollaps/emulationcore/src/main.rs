@@ -27,70 +27,55 @@ mod xmlgraphparser;
 use crate::emulationcore::EmulationCore;
 
 use std::env;
-use tokio::runtime;
 
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 fn main() {
-    // Logging
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO) // set to `LevelFilter::OFF` to disable logging completely
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    // TODO move parsing arguments to here
-    // TODO move runtime initialization to here
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    // TODO argument parsing with an help message
     if env::args().len() == 4 {
-        container_deployment();
+        let id = env::args().nth(1).unwrap();
+        let pid = env::args().nth(2).unwrap().parse::<u32>().unwrap();
+        let orchestrator = env::args().nth(3).unwrap();
+
+        rt.block_on(container_deployment(id, pid, orchestrator));
     } else {
-        baremetal_deployment();
+        let topology_file = env::args().nth(1).unwrap();
+        let cm_file = env::args().nth(2).unwrap();
+        let networkdevice = env::args().nth(3).unwrap();
+
+        rt.block_on(baremetal_deployment(topology_file, cm_file, networkdevice));
     }
 }
 
-fn container_deployment() {
-    let id = env::args().nth(1).unwrap();
-
-    let pid = env::args().nth(2).unwrap().parse::<u32>().unwrap();
-
-    let orchestrator = env::args().nth(3).unwrap();
-
-    let basic_rt = runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
-
-    info!("EC {} starting", id);
+async fn container_deployment(id: String, pid: u32, orchestrator: String) {
+    info!("EC {}: starting", id);
     let mut ec = EmulationCore::new(id.clone(), pid, orchestrator);
-    ec.init();
-    basic_rt.block_on(async move { ec.emulation_loop().await });
-    info!("EC {}: stopping", id);
+    ec.init().await;
+    ec.emulation_loop().await;
+    info!("EC {}: stopped", id);
 }
 
-fn baremetal_deployment() {
-    info!("EC: baremetal deployment started");
-    let topology_file = env::args().nth(1).unwrap();
-
-    let cm_file = env::args().nth(2).unwrap();
-
-    let networkdevice = env::args().nth(3).unwrap();
+async fn baremetal_deployment(topology_file: String, cm_file: String, ifname: String) {
+    info!("EC: starting");
 
     let mut ec = EmulationCore::new("".to_string(), 0, "baremetal".to_string());
-
     ec.set_topology_file(topology_file);
-
     ec.set_cm_file(cm_file);
+    ec.set_network_device(ifname);
 
-    ec.set_network_device(networkdevice);
-
-    ec.init_baremetal();
-
-    let basic_rt = runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
-    basic_rt.block_on(async move { ec.emulation_loop().await });
-    info!("EC: stopped emulation");
+    ec.init_baremetal().await;
+    ec.emulation_loop().await;
+    info!("EC: stopped");
 }

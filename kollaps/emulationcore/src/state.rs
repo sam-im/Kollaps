@@ -13,9 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::aux::print_message;
 use crate::elements::{Flowu16, Link, Path};
@@ -32,7 +33,7 @@ pub struct State {
     pub active_paths: Vec<Arc<Mutex<Path>>>, //paths that this container sent bytes to
     pub active_paths_ids: Vec<u32>,
     pub name: String,
-    pub emulation: Arc<Mutex<Emulation>>, //object that handles TC
+    pub emulation: Emulation, // Sender to Emulation (TCAL client)
     pub id: String,
     pub link_count: u32,
     pub max_age: u32,
@@ -48,7 +49,7 @@ impl State {
             active_paths: vec![],
             active_paths_ids: vec![],
             name: "".to_string(),
-            emulation: Arc::new(Mutex::new(Emulation::new())),
+            emulation: Emulation::new(),
             id: id,
             link_count: 0,
             max_age: 2,
@@ -57,13 +58,12 @@ impl State {
     }
 
     //Here we setup the TC qdisc to emulate the network state
-    pub fn init(&mut self, ip: u32) -> Result<()> {
-        let mut emulation = self.emulation.lock().unwrap();
+    pub async fn init(&mut self, ip: u32) -> Result<()> {
         let current_graph_handle = self.get_current_graph();
-        let current_graph = current_graph_handle.lock().unwrap();
-        let current_graph_root = current_graph.graph_root.as_ref().unwrap().lock().unwrap();
+        let current_graph = current_graph_handle.lock().await;
+        let current_graph_root = current_graph.graph_root.as_ref().unwrap().lock().await;
 
-        emulation.init(ip);
+        self.emulation.init(ip, 7073).await;
 
         let ip_to_path_id = current_graph.ip_to_path_id.clone();
 
@@ -80,7 +80,7 @@ impl State {
             let mut paths = current_graph.paths.clone();
 
             for (id, path) in paths.iter_mut() {
-                let p = path.lock().unwrap();
+                let p = path.lock().await;
 
                 let service_name = p.finish.clone();
 
@@ -109,7 +109,7 @@ impl State {
                         self.name.clone(),
                         format!("disabled due to no links path to {} with ip {}", finish, ip),
                     );
-                    emulation.disable_path(ip);
+                    self.emulation.disable_path(ip).await;
                 // else is a path to another container
                 } else {
                     print_message(
@@ -119,7 +119,9 @@ impl State {
                             start, finish, latency, links, bandwidth, drop
                         ),
                     );
-                    emulation.initialize_path(ip, bandwidth, latency, jitter, drop);
+                    self.emulation
+                        .enable_path(ip, bandwidth, latency, jitter, drop)
+                        .await;
                     opened_paths.push(service_name.clone());
                 }
             }
@@ -130,13 +132,13 @@ impl State {
                     let service = services.get(&ip);
                     let mut name = "".to_string();
                     if !service.is_none() {
-                        name = service.unwrap().lock().unwrap().hostname.clone();
+                        name = service.unwrap().lock().await.hostname.clone();
                     }
                     print_message(
                         self.name.clone(),
                         format!("Disabled due to no path to {} with name {}", ip, name),
                     );
-                    emulation.disable_path(ip);
+                    self.emulation.disable_path(ip).await;
                 }
             }
         }
@@ -152,13 +154,13 @@ impl State {
                     .first()
                     .unwrap()
                     .lock()
-                    .unwrap()
+                    .await
                     .ip;
 
                 let path_id = current_graph.ip_to_path_id.get(&ip).unwrap();
 
                 let path = current_graph.paths.get(path_id).unwrap().clone();
-                let p = path.lock().unwrap();
+                let p = path.lock().await;
 
                 let bandwidth = (p.max_bandwidth / 1000.0) as u32;
 
@@ -169,10 +171,12 @@ impl State {
                 let drop = p.drop;
 
                 if p.links.is_empty() {
-                    emulation.disable_path(ip);
+                    self.emulation.disable_path(ip).await;
                 // else is a path to another container
                 } else {
-                    emulation.initialize_path(ip, bandwidth, latency, jitter, drop);
+                    self.emulation
+                        .enable_path(ip, bandwidth, latency, jitter, drop)
+                        .await;
                     opened_paths.push(service_name);
                 }
             }
@@ -182,7 +186,7 @@ impl State {
             let services = current_graph.services.clone();
 
             for (ip, service) in services.iter() {
-                let s = service.lock().unwrap();
+                let s = service.lock().await;
                 let service_name = s.hostname.clone();
 
                 //if we for some reason create 2 paths (qdiscs) to the same hosts then dynamic changes will not work
@@ -190,7 +194,7 @@ impl State {
                     let path_id = current_graph.ip_to_path_id.get(&ip).unwrap();
 
                     let path = current_graph.paths.get(path_id).unwrap().clone();
-                    let p = path.lock().unwrap();
+                    let p = path.lock().await;
 
                     let bandwidth = (p.max_bandwidth / 1000.0) as u32;
 
@@ -201,10 +205,12 @@ impl State {
                     let drop = p.drop;
 
                     if p.links.is_empty() {
-                        emulation.disable_path(*ip);
+                        self.emulation.disable_path(*ip).await;
                     // else is a path to another container
                     } else {
-                        emulation.initialize_path(*ip, bandwidth, latency, jitter, drop);
+                        self.emulation
+                            .enable_path(*ip, bandwidth, latency, jitter, drop)
+                            .await;
                     }
                 }
             }
@@ -212,22 +218,23 @@ impl State {
         Ok(())
     }
 
-    pub fn set_link_count(&mut self, link_count: u32) {
+    pub async fn set_link_count(&mut self, link_count: u32) {
         self.link_count = link_count;
 
         for graph in self.graphs.iter_mut() {
-            graph.lock().unwrap().link_count = link_count
+            graph.lock().await.link_count = link_count
         }
     }
 
     //Creates and inserts an empty graph in the vector
-    pub fn insert_graph(&mut self) {
+    pub async fn insert_graph(&mut self) {
         let graph = Arc::new(Mutex::new(Graph::new()));
         if !self.graphs.is_empty() {
             graph
                 .lock()
-                .unwrap()
-                .create_from_graph(self.get_graph_most_recent().clone());
+                .await
+                .create_from_graph(self.get_graph_most_recent().clone())
+                .await;
         }
         self.graphs.push(graph);
         self.graph_counter += 1;
@@ -248,27 +255,25 @@ impl State {
         return Arc::clone(&self.graphs[age]);
     }
 
-    pub fn shrink_maps(&mut self) {
+    pub async fn shrink_maps(&mut self) {
         for graph in self.graphs.iter_mut() {
-            let mut graph = graph.lock().unwrap();
-            {
-                graph.services.shrink_to_fit();
-                graph.paths.shrink_to_fit();
-                graph.links.shrink_to_fit();
-                graph.bridges.shrink_to_fit();
-                graph.services_by_name.shrink_to_fit();
-                graph.bridges_by_name.shrink_to_fit();
-                graph.ip_to_path_id.shrink_to_fit();
-                graph.path_id_to_ip.shrink_to_fit();
-            }
+            let mut graph = graph.lock().await;
+            graph.services.shrink_to_fit();
+            graph.paths.shrink_to_fit();
+            graph.links.shrink_to_fit();
+            graph.bridges.shrink_to_fit();
+            graph.services_by_name.shrink_to_fit();
+            graph.bridges_by_name.shrink_to_fit();
+            graph.ip_to_path_id.shrink_to_fit();
+            graph.path_id_to_ip.shrink_to_fit();
         }
     }
 
     //Increments the age and updates the new structures with older emulation metadata
-    pub fn increment_age(&mut self) {
+    pub async fn increment_age(&mut self) {
         info!("EC {}: started changing properties", self.name);
-        self.path_changes();
-        self.collect_old_usages();
+        self.path_changes().await;
+        self.collect_old_usages().await;
 
         self.age += 1;
 
@@ -277,14 +282,14 @@ impl State {
     }
 
     //Retrieves bandwidth values of older graph
-    pub fn path_changes(&mut self) {
+    pub async fn path_changes(&mut self) {
         let age = self.age;
 
         //Get current ip_to_id (can be cloned just u32 values)
         let ip_to_path_ids = self
             .get_graph_with_age(age + 1)
             .lock()
-            .unwrap()
+            .await
             .ip_to_path_id
             .clone();
 
@@ -292,7 +297,7 @@ impl State {
         let old_ip_to_path_ids = self
             .get_graph_with_age(age)
             .lock()
-            .unwrap()
+            .await
             .ip_to_path_id
             .clone();
 
@@ -305,12 +310,12 @@ impl State {
                     let root_ip = self
                         .get_current_graph()
                         .lock()
-                        .unwrap()
+                        .await
                         .graph_root
                         .as_ref()
                         .unwrap()
                         .lock()
-                        .unwrap()
+                        .await
                         .ip;
                     if root_ip == *ip {
                         continue;
@@ -318,28 +323,28 @@ impl State {
                     let start = self
                         .get_graph_with_age(age)
                         .lock()
-                        .unwrap()
+                        .await
                         .get_path(*id)
                         .unwrap()
                         .lock()
-                        .unwrap()
+                        .await
                         .start
                         .clone();
                     let finish = self
                         .get_graph_with_age(age)
                         .lock()
-                        .unwrap()
+                        .await
                         .get_path(*id)
                         .unwrap()
                         .lock()
-                        .unwrap()
+                        .await
                         .finish
                         .clone();
 
                     if self
                         .get_graph_with_age(age)
                         .lock()
-                        .unwrap()
+                        .await
                         .bridges_by_name
                         .contains_key(&finish)
                     {
@@ -350,7 +355,7 @@ impl State {
                         self.name.clone(),
                         format!("Blocked path from {} to {}", start, finish),
                     );
-                    self.emulation.lock().unwrap().change_loss(*ip, 1.0);
+                    self.emulation.set_loss(*ip, 1.0).await;
                 }
             }
         }
@@ -363,12 +368,12 @@ impl State {
                 root_ip = self
                     .get_current_graph()
                     .lock()
-                    .unwrap()
+                    .await
                     .graph_root
                     .as_ref()
                     .unwrap()
                     .lock()
-                    .unwrap()
+                    .await
                     .ip;
             }
             if root_ip == *ip {
@@ -381,19 +386,19 @@ impl State {
                     match self
                         .get_graph_with_age(age)
                         .lock()
-                        .unwrap()
+                        .await
                         .paths
                         .get_mut(old_id)
                     {
                         Some(path) => {
-                            let p = path.lock().unwrap();
+                            let p = path.lock().await;
                             let used_bandwidth = p.used_bandwidth.clone();
                             let current_bandwidth = p.current_bandwidth.clone();
 
                             let new_path_handle = self
                                 .get_graph_with_age(age + 1)
                                 .lock()
-                                .unwrap()
+                                .await
                                 .get_path(*id)
                                 .clone();
 
@@ -402,14 +407,14 @@ impl State {
                             }
 
                             let new_path_handle = new_path_handle.unwrap();
-                            let mut new_path = new_path_handle.lock().unwrap();
+                            let mut new_path = new_path_handle.lock().await;
 
                             let finish = new_path.finish.clone();
 
                             if self
                                 .get_graph_with_age(age + 1)
                                 .lock()
-                                .unwrap()
+                                .await
                                 .bridges_by_name
                                 .contains_key(&finish)
                             {
@@ -424,11 +429,12 @@ impl State {
                             let new_jitter = new_path.jitter;
                             let new_loss = new_path.drop;
                             //print_message(self.name.clone(),format!("Changed path from {} to {} and new latency is {} and new drop is {}",start,finish,new_latency.clone(),new_loss.clone()));
-                            let mut emulation = self.emulation.lock().unwrap();
-                            emulation.change_loss(*ip, new_loss);
+                            self.emulation.set_loss(*ip, new_loss).await;
 
                             if new_latency != 0.0 {
-                                emulation.change_latency(*ip, new_latency, new_jitter);
+                                self.emulation
+                                    .set_latency(*ip, new_latency, new_jitter)
+                                    .await;
                             }
                         }
                         None => {}
@@ -436,9 +442,9 @@ impl State {
                 }
                 None => {
                     let graph_handle = self.get_graph_with_age(age + 1);
-                    let graph = graph_handle.lock().unwrap();
+                    let graph = graph_handle.lock().await;
                     let new_path_handle = graph.get_path(*id).unwrap();
-                    let new_path = new_path_handle.lock().unwrap();
+                    let new_path = new_path_handle.lock().await;
 
                     let start = new_path.start.clone();
 
@@ -458,11 +464,12 @@ impl State {
                             start, finish, new_latency, new_loss
                         ),
                     );
-                    let mut emulation = self.emulation.lock().unwrap();
-                    emulation.change_loss(*ip, new_loss);
+                    self.emulation.set_loss(*ip, new_loss).await;
 
                     if new_latency != 0.0 {
-                        emulation.change_latency(*ip, new_latency, new_jitter);
+                        self.emulation
+                            .set_latency(*ip, new_latency, new_jitter)
+                            .await;
                     }
                 }
             };
@@ -470,35 +477,30 @@ impl State {
     }
 
     //Retrieve the amount of bytes sent to services to update in the new HashMap
-    pub fn collect_old_usages(&mut self) {
+    pub async fn collect_old_usages(&mut self) {
         let age = self.age;
-        let services_ips = self.get_graph_with_age(age + 1).lock().unwrap().ips.clone();
+        let services_ips = self.get_graph_with_age(age + 1).lock().await.ips.clone();
 
         for ip in services_ips {
-            match self
-                .get_graph_with_age(age)
-                .lock()
-                .unwrap()
-                .services
-                .get(&ip)
-            {
+            match self.get_graph_with_age(age).lock().await.services.get(&ip) {
                 Some(service_old) => {
-                    let last_bytes = service_old.lock().unwrap().last_bytes;
+                    let last_bytes = service_old.lock().await.last_bytes;
                     self.get_graph_with_age(age + 1)
                         .lock()
-                        .unwrap()
-                        .set_lastbytes(&ip, last_bytes);
+                        .await
+                        .set_lastbytes(&ip, last_bytes)
+                        .await;
                 }
                 None => {}
             }
         }
     }
 
-    pub fn insert_active_path_id(&mut self, ip: u32) {
+    pub async fn insert_active_path_id(&mut self, ip: u32) {
         let path_id = self
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .get_path_id_from_ip(ip);
 
         match path_id {
@@ -516,7 +518,7 @@ impl State {
         };
     }
 
-    pub fn calculate_bandwidth(&mut self) {
+    pub async fn calculate_bandwidth(&mut self) {
         let rtt = 0;
         let bw = 1;
 
@@ -528,38 +530,38 @@ impl State {
         let mut flows_to_remove: Vec<String> = vec![];
 
         for path_id in self.active_paths_ids.clone() {
-            let path_handle = self.get_path(path_id).unwrap().clone();
-            let path = path_handle.lock().unwrap();
+            let path_handle = self.get_path(path_id).await.unwrap().clone();
+            let path = path_handle.lock().await;
 
             let links = path.links.clone();
             let pathrtt = path.rtt;
             let path_used_bandwidth = path.used_bandwidth;
 
             for link_id in links {
-                let link = self.get_link(link_id);
+                let link = self.get_link(link_id).await;
                 let mut flow = vec![];
                 flow.push(pathrtt);
                 flow.push(path_used_bandwidth);
-                link.lock().unwrap().flows.push(flow);
+                link.lock().await.flows.push(flow);
                 active_links_ids.push(link_id);
             }
         }
 
         //add info about other flows
-        let flow_keys = self.get_flow_keys();
+        let flow_keys = self.get_flow_keys().await;
 
         for (key, _value) in flow_keys.iter() {
-            let flow = self.get_flow_u16(&key);
-            let age = flow.lock().unwrap().age;
+            let flow = self.get_flow_u16(&key).await;
+            let age = flow.lock().await.age;
 
             if age < self.max_age {
-                self.apply_flow_u16(&key);
-                let link_indices = flow.lock().unwrap().link_indices.clone();
+                self.apply_flow_u16(&key).await;
+                let link_indices = flow.lock().await.link_indices.clone();
 
                 for link_id in link_indices {
                     active_links_ids.push(link_id as u16);
                 }
-                flow.lock().unwrap().age = age + 1;
+                flow.lock().await.age = age + 1;
             } else {
                 flows_to_remove.push(key.clone());
             }
@@ -567,9 +569,9 @@ impl State {
         //Calculations
 
         for path_id in self.active_paths_ids.clone() {
-            let path_handle = self.get_path(path_id).unwrap().clone();
+            let path_handle = self.get_path(path_id).await.unwrap().clone();
 
-            let mut path = path_handle.lock().unwrap();
+            let mut path = path_handle.lock().await;
 
             let mut max_bandwidth = path.max_bandwidth;
             let max_bandwidth_path = path.max_bandwidth;
@@ -577,8 +579,8 @@ impl State {
             for link_id in path.links.clone() {
                 let mut rtt_reverse_sum = 0.000;
 
-                let _link = self.get_link(link_id);
-                let link = _link.lock().unwrap();
+                let _link = self.get_link(link_id).await;
+                let link = _link.lock().await;
                 let link_flows = link.flows.clone();
 
                 if link_flows.is_empty() {
@@ -653,48 +655,45 @@ impl State {
                 let ip = self
                     .get_current_graph()
                     .lock()
-                    .unwrap()
+                    .await
                     .get_ip_from_path_id(path_id)
                     .clone();
                 //call tc to change
                 let new_bandwidth = path.current_bandwidth;
 
-                self.emulation
-                    .lock()
-                    .unwrap()
-                    .change_bandwidth(ip, new_bandwidth as u32);
+                self.emulation.set_bandwidth(ip, new_bandwidth as u32).await;
             }
         }
 
         for id in active_links_ids {
-            self.clear_link(id as u16);
+            self.clear_link(id as u16).await;
         }
 
         for key in flows_to_remove {
             let current_graph_handle = self.get_current_graph();
-            let mut current_graph = current_graph_handle.lock().unwrap();
+            let mut current_graph = current_graph_handle.lock().await;
             current_graph.flow_accumulator_u16.remove(&key);
             current_graph.flow_accumulator_keys.remove(&key);
         }
     }
 
     //Add flow received from CM to our state
-    pub fn apply_flow_u16(&mut self, key: &String) {
-        let flow_handle = self.get_flow_u16(key);
-        let flow = flow_handle.lock().unwrap();
+    pub async fn apply_flow_u16(&mut self, key: &String) {
+        let flow_handle = self.get_flow_u16(key).await;
+        let flow = flow_handle.lock().await;
 
         let link_indices = flow.link_indices.clone();
         let path_used_bandwidth = flow.bandwidth;
         let mut pathrtt = 0.0;
         //calculate RTT
         for index in link_indices.clone() {
-            let link = self.get_link(index as u16);
-            let rtt = link.lock().unwrap().latency * 2.0;
+            let link = self.get_link(index as u16).await;
+            let rtt = link.lock().await.latency * 2.0;
             pathrtt += rtt;
         }
 
         for index in link_indices {
-            let link = self.get_link(index as u16);
+            let link = self.get_link(index as u16).await;
 
             let mut flow = vec![];
 
@@ -702,12 +701,12 @@ impl State {
 
             flow.push(path_used_bandwidth);
 
-            link.lock().unwrap().flows.push(flow);
+            link.lock().await.flows.push(flow);
         }
     }
 
-    pub fn get_link(&mut self, id: u16) -> Arc<Mutex<Link>> {
-        match self.get_current_graph().lock().unwrap().links.get_mut(&id) {
+    pub async fn get_link(&mut self, id: u16) -> Arc<Mutex<Link>> {
+        match self.get_current_graph().lock().await.links.get_mut(&id) {
             Some(link) => {
                 return link.clone();
             }
@@ -718,38 +717,38 @@ impl State {
         };
     }
 
-    pub fn clear_link(&mut self, id: u16) {
+    pub async fn clear_link(&mut self, id: u16) {
         self.get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .links
             .get_mut(&id)
             .unwrap()
             .lock()
-            .unwrap()
+            .await
             .clear_flows();
     }
 
-    pub fn get_path(&mut self, id: u32) -> Option<Arc<Mutex<Path>>> {
-        return self.get_current_graph().lock().unwrap().get_path(id);
+    pub async fn get_path(&mut self, id: u32) -> Option<Arc<Mutex<Path>>> {
+        return self.get_current_graph().lock().await.get_path(id);
     }
 
-    pub fn get_flow_u16(&mut self, key: &String) -> Arc<Mutex<Flowu16>> {
+    pub async fn get_flow_u16(&mut self, key: &String) -> Arc<Mutex<Flowu16>> {
         return self
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .flow_accumulator_u16
             .get_mut(key)
             .unwrap()
             .clone();
     }
 
-    pub fn get_flow_keys(&mut self) -> HashMap<String, String> {
+    pub async fn get_flow_keys(&mut self) -> HashMap<String, String> {
         return self
             .get_current_graph()
             .lock()
-            .unwrap()
+            .await
             .flow_accumulator_keys
             .clone();
     }
@@ -758,11 +757,11 @@ impl State {
         self.active_paths_ids.clear();
     }
 
-    pub fn get_active_paths(&mut self) -> Vec<Arc<Mutex<Path>>> {
+    pub async fn get_active_paths(&mut self) -> Vec<Arc<Mutex<Path>>> {
         let mut paths = vec![];
 
         for id in &self.active_paths_ids.clone() {
-            paths.push(self.get_path(*id).unwrap().clone());
+            paths.push(self.get_path(*id).await.unwrap().clone());
         }
 
         return paths;

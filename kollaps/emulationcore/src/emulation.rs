@@ -13,116 +13,163 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::aux::print_and_fail;
 use libloading::{Library, Symbol};
-use tracing::error;
+use tokio::sync::mpsc;
+use tracing::{error, warn};
 
-//Interacts with TC library
+/// Sender to the Emulation (TCAL client) receiver loop.
+/// Cloning this struct is cheap, since it only encapsulates the `mpsc::Sender`.
+#[derive(Clone)]
 pub struct Emulation {
-    library: Library,
-    pub name: String,
+    tx: mpsc::Sender<EmulationCmd>,
 }
 
 impl Emulation {
-    pub fn new() -> Emulation {
-        unsafe {
-            Emulation {
-                library: Library::new("/usr/local/bin/libTCAL.so").unwrap(),
-                name: String::new(),
-            }
-        }
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel(32);
+
+        tokio::spawn(async move { recv_loop(rx).await });
+        Self { tx }
     }
 
-    pub fn init(&mut self, ip: u32) {
-        let udp_port = 7073;
-        unsafe {
-            let tcinit: Symbol<unsafe extern "C" fn(u32, u32, u32)> =
-                self.library.get(b"init").unwrap();
-            tcinit(udp_port, 1000, ip);
-        }
+    pub async fn init(&self, ip: u32, port: u32) {
+        let _ = self.tx.send(EmulationCmd::Init { ip, port }).await;
     }
+    pub async fn enable_path(&self, ip: u32, bandwidth: u32, latency: f32, jitter: f32, drop: f32) {
+        let _ = self
+            .tx
+            .send(EmulationCmd::EnablePath {
+                ip,
+                bandwidth,
+                latency,
+                jitter,
+                drop,
+            })
+            .await;
+    }
+    pub async fn disable_path(&self, ip: u32) {
+        let _ = self.tx.send(EmulationCmd::DisablePath { ip }).await;
+    }
+    pub async fn set_bandwidth(&self, ip: u32, bandwidth: u32) {
+        let _ = self
+            .tx
+            .send(EmulationCmd::SetBandwidth { ip, bandwidth })
+            .await;
+    }
+    pub async fn set_loss(&self, ip: u32, loss: f32) {
+        let _ = self.tx.send(EmulationCmd::SetLoss { ip, loss }).await;
+    }
+    pub async fn set_latency(&self, ip: u32, latency: f32, jitter: f32) {
+        let _ = self
+            .tx
+            .send(EmulationCmd::SetLatency {
+                ip,
+                latency,
+                jitter,
+            })
+            .await;
+    }
+    pub async fn disconnect(&self) {
+        let _ = self.tx.send(EmulationCmd::Disconnect).await;
+    }
+    pub async fn reconnect(&self) {
+        let _ = self.tx.send(EmulationCmd::Reconnect).await;
+    }
+    pub async fn teardown(&self) {
+        let _ = self.tx.send(EmulationCmd::Teardown);
+    }
+}
 
-    pub fn initialize_path(
-        &mut self,
-        destinationip: u32,
+/// Accepted command / message types by the receiver loop of `Emulation`.
+enum EmulationCmd {
+    Init {
+        ip: u32,
+        port: u32,
+    },
+    EnablePath {
+        ip: u32,
         bandwidth: u32,
         latency: f32,
         jitter: f32,
         drop: f32,
-    ) {
-        if latency == 0.0 {
-            print_and_fail(
-                "error: Shutting down. latency between two nodes can not be 0".to_string(),
-            );
-        }
-        unsafe {
-            let initdestination: Symbol<unsafe extern "C" fn(u32, u32, f32, f32, f32)> =
-                self.library.get(b"initDestination").unwrap();
+    },
+    DisablePath {
+        ip: u32,
+    },
+    SetBandwidth {
+        ip: u32,
+        bandwidth: u32,
+    },
+    SetLoss {
+        ip: u32,
+        loss: f32,
+    },
+    SetLatency {
+        ip: u32,
+        latency: f32,
+        jitter: f32,
+    },
+    Disconnect,
+    Reconnect,
+    Teardown,
+}
 
-            initdestination(destinationip, bandwidth, latency, jitter, drop);
-        }
-    }
+async fn recv_loop(mut rx: mpsc::Receiver<EmulationCmd>) {
+    let tc_lib = unsafe { Library::new("/usr/local/bin/libTCAL.so").unwrap() };
 
-    pub fn disable_path(&mut self, destinationip: u32) {
-        unsafe {
-            let initdestination: Symbol<unsafe extern "C" fn(u32, u32, f32, f32, f32)> =
-                self.library.get(b"initDestination").unwrap();
-            initdestination(destinationip, 10000, 1.0, 0.0, 1.0);
-        }
-    }
+    let init: Symbol<unsafe extern "C" fn(u32, u32, u32)> = unsafe { tc_lib.get(b"init").unwrap() };
+    let set_path: Symbol<unsafe extern "C" fn(u32, u32, f32, f32, f32)> =
+        unsafe { tc_lib.get(b"initDestination").unwrap() };
+    let set_bw: Symbol<unsafe extern "C" fn(u32, u32)> =
+        unsafe { tc_lib.get(b"changeBandwidth").unwrap() };
+    let set_loss: Symbol<unsafe extern "C" fn(u32, f32)> =
+        unsafe { tc_lib.get(b"changeLoss").unwrap() };
+    let set_latency: Symbol<unsafe extern "C" fn(u32, f32, f32)> =
+        unsafe { tc_lib.get(b"changeLatency").unwrap() };
+    let disconnect: Symbol<unsafe extern "C" fn()> = unsafe { tc_lib.get(b"disconnect").unwrap() };
+    let reconnect: Symbol<unsafe extern "C" fn()> = unsafe { tc_lib.get(b"reconnect").unwrap() };
+    let teardown: Symbol<unsafe extern "C" fn(u32)> = unsafe { tc_lib.get(b"tearDown").unwrap() };
 
-    pub fn change_bandwidth(&mut self, ip: u32, bandwidth: u32) {
-        let bw_in_kbps = match bandwidth {
-            0 => {
-                error!(bandwidth, "EC {}: bandwitdh set to 1 instead", self.name);
-                1 / 1000
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            EmulationCmd::Init { ip, port } => unsafe {
+                init(port, 1000, ip);
+            },
+            EmulationCmd::EnablePath {
+                ip,
+                bandwidth,
+                latency,
+                jitter,
+                drop,
+            } => {
+                if latency == 0.0 {
+                    error!(latency, "latency between two nodes can not be 0");
+                    std::process::exit(-1);
+                }
+                unsafe {
+                    set_path(ip, bandwidth, latency, jitter, drop);
+                }
             }
-            bw => bw / 1000,
-        };
-
-        unsafe {
-            let changebw: Symbol<unsafe extern "C" fn(u32, u32)> =
-                self.library.get(b"changeBandwidth").unwrap();
-            changebw(ip, bw_in_kbps);
-        }
-    }
-
-    pub fn change_loss(&mut self, ip: u32, loss: f32) {
-        unsafe {
-            let changeloss: Symbol<unsafe extern "C" fn(u32, f32)> =
-                self.library.get(b"changeLoss").unwrap();
-            changeloss(ip, loss);
-        }
-    }
-
-    pub fn change_latency(&mut self, ip: u32, latency: f32, jitter: f32) {
-        unsafe {
-            let changelatency: Symbol<unsafe extern "C" fn(u32, f32, f32)> =
-                self.library.get(b"changeLatency").unwrap();
-            changelatency(ip, latency, jitter);
-        }
-    }
-
-    pub fn disconnect(&mut self) {
-        unsafe {
-            let disconnect: Symbol<unsafe extern "C" fn()> =
-                self.library.get(b"disconnect").unwrap();
-            disconnect();
-        }
-    }
-
-    pub fn reconnect(&mut self) {
-        unsafe {
-            let reconnect: Symbol<unsafe extern "C" fn()> = self.library.get(b"reconnect").unwrap();
-            reconnect();
-        }
-    }
-
-    pub fn tear_down(&mut self) {
-        unsafe {
-            let teardown: Symbol<unsafe extern "C" fn(u32)> =
-                self.library.get(b"tearDown").unwrap();
-            teardown(0);
+            EmulationCmd::DisablePath { ip } => unsafe { set_path(ip, 10000, 1.0, 0.0, 1.0) },
+            EmulationCmd::SetBandwidth { ip, bandwidth } => {
+                let bw_in_kbps = match bandwidth {
+                    0 => {
+                        warn!(bandwidth, "can not be set to 0, it is set to 1 instead");
+                        1
+                    }
+                    bw => bw / 1000,
+                };
+                unsafe { set_bw(ip, bw_in_kbps) }
+            }
+            EmulationCmd::SetLoss { ip, loss } => unsafe { set_loss(ip, loss) },
+            EmulationCmd::SetLatency {
+                ip,
+                latency,
+                jitter,
+            } => unsafe { set_latency(ip, latency, jitter) },
+            EmulationCmd::Disconnect => unsafe { disconnect() },
+            EmulationCmd::Reconnect => unsafe { reconnect() },
+            EmulationCmd::Teardown => unsafe { teardown(0) },
         }
     }
 }
