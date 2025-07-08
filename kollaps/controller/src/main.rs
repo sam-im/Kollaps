@@ -13,200 +13,180 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use emulationcore::state::State;
+use emulationcore::xmlgraphparser::XMLGraphParser;
+use roxmltree::Document;
 use std::env;
 use std::sync::Arc;
-use std::sync::Mutex;
-use emulationcore::xmlgraphparser::XMLGraphParser;
-use emulationcore::state::State;
-use async_std::prelude::*;
-use async_std::task;
-use async_std::net::TcpStream;
-use std::{time};
-use std::fs::OpenOptions;
-use std::io::prelude::*; 
-use std::thread;
-use std::io::{BufRead, BufReader};
-use roxmltree::Document;
-use emulationcore::aux::print_message;
+use std::time::Duration;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio::time::sleep;
 
-
-fn main() {
-
-    let topology_file = env::args().nth(1).unwrap();
-
-    let command = env::args().nth(2).unwrap();
-
-    task::block_on(process_command(topology_file.clone(),command.clone())).map_err(|err| println!("{:?}", err)).ok();
-
-    
-}
+const SHUTDOWN_CMD: u8 = 2;
+const READY_CMD: u8 = 3;
+const START_CMD: u8 = 4;
+const SLEEP_DURATION: Duration = Duration::from_millis(1000);
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-async fn process_command(topology_file:String,command:String)->Result<()>{
 
-    let shutdown_command:u8 = 2;
-    let ready_command:u8 = 3;
-    let start_command:u8 = 4;
-    
-    if command == "ready"{
+fn main() -> Result<()> {
+    let topology_file = env::args().nth(1).unwrap();
+    let command = env::args().nth(2).unwrap();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(1)
+        .build()?;
+
+    rt.block_on(process_command(topology_file, command))?;
+
+    Ok(())
+}
+
+async fn process_command(topology_file: String, command: String) -> Result<()> {
+    if command == "ready" {
         let state = Arc::new(Mutex::new(State::new("controller".to_string())));
+        state.lock().await.insert_graph().await;
 
-        state.lock().unwrap().insert_graph();
-    
-        let mut parser = XMLGraphParser::new(state.clone(),"baremetal".to_string());
-
-        let text = std::fs::read_to_string(topology_file.clone()).unwrap();
-        
-        let doc = Document::parse(&text).unwrap();
-
+        let mut parser = XMLGraphParser::new(state, "baremetal".to_string());
+        let text = std::fs::read_to_string(topology_file)?;
+        let doc = Document::parse(&text)?;
         let root = doc.root().first_child().unwrap();
-    
-        parser.fill_graph(root);
+
+        parser.fill_graph(root).await;
 
         let mut remote_ips = vec![];
-    
+
         let ips = parser.ips.clone();
-    
+
         let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(true)
-        .open("/ips.txt")
-        .unwrap();
+            .write(true)
+            .create(true)
+            .append(true)
+            .open("/ips.txt")
+            .await?;
 
-    
-        for ip in ips{
-
-            let mut ip_with_port;
-            if ip == parser.controller_ip{
-                ip_with_port = format!("0.0.0.0{}",":7073");
-            } 
-            else{
-                ip_with_port = format!("{}{}",ip,":7073");
-            }          
+        for ip in ips {
+            let ip_with_port = if ip == parser.controller_ip {
+                format!("0.0.0.0:{}", "7073")
+            } else {
+                format!("{}:{}", ip, "7073")
+            };
             remote_ips.push(ip_with_port.clone());
-            file.write_all(format!("{}\n",ip_with_port.clone()).as_bytes()).expect("Unable to write data");
-
+            file.write_all(format!("{}\n", ip_with_port).as_bytes())
+                .await?;
         }
-
-
-        let sleeptime = time::Duration::from_millis(1000);
 
         let mut streams = vec![];
         let mut ips_connected = vec![];
-        while ips_connected.len() != remote_ips.clone().len(){
-            thread::sleep(sleeptime);
-            for (i,remote_ip) in remote_ips.clone().iter().enumerate(){
-                if !(ips_connected.contains(&i)){
-                    let stream = TcpStream::connect(remote_ip.clone()).await;
-                    match stream{
-                        Ok(stream)=> {
+        while ips_connected.len() != remote_ips.len() {
+            sleep(SLEEP_DURATION).await;
+            for (i, remote_ip) in remote_ips.iter().enumerate() {
+                if !(ips_connected.contains(&i)) {
+                    let stream = TcpStream::connect(remote_ip).await;
+                    match stream {
+                        Ok(stream) => {
                             streams.push(stream);
-                            ips_connected.push(i.clone());
-                        },
-                        Err(e)=> println!("{}",e.to_string()),
-                    }; 
-                }   
+                            ips_connected.push(i);
+                        }
+                        Err(e) => println!("{}", e.to_string()),
+                    };
+                }
             }
         }
 
-        let mut buffer = vec![0;1];
+        let mut buffer = vec![0; 1];
 
-        buffer[0] = ready_command;
+        buffer[0] = READY_CMD;
 
-        for mut stream in streams{
+        for mut stream in streams {
+            stream.write_all(&buffer).await?;
+        }
+    }
+
+    if command == "start" {
+        let pathremoteips = "/ips.txt";
+
+        let file = OpenOptions::new().read(true).open(&pathremoteips).await?;
+
+        let reader = BufReader::new(file);
+
+        let mut lines = reader.lines();
+
+        let mut remote_ips: Vec<String> = vec![];
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            remote_ips.push(line);
+        }
+
+        let mut streams = vec![];
+        let mut ips_connected = vec![];
+        while ips_connected.len() != remote_ips.len() {
+            sleep(SLEEP_DURATION).await;
+            for (i, remote_ip) in remote_ips.iter().enumerate() {
+                if !(ips_connected.contains(&i)) {
+                    let stream = TcpStream::connect(remote_ip).await;
+                    match stream {
+                        Ok(stream) => {
+                            streams.push(stream);
+                            ips_connected.push(i);
+                        }
+                        Err(e) => println!("{}", e.to_string()),
+                    };
+                }
+            }
+        }
+
+        let mut buffer = vec![0; 1];
+
+        buffer[0] = START_CMD;
+
+        for mut stream in streams {
             stream.write(&buffer).await?;
         }
     }
 
-    if command == "start"{
-
+    if command == "stop" {
         let pathremoteips = "/ips.txt";
 
-        let file = OpenOptions::new().read(true).open(&pathremoteips).expect("file not found");
-    
+        let file = OpenOptions::new().read(true).open(&pathremoteips).await?;
+
         let reader = BufReader::new(file);
-    
-        let lines = reader.lines();
-    
-        let mut remote_ips = vec![];
-    
-        for line in lines{
-            remote_ips.push(line.unwrap());
+
+        let mut lines = reader.lines();
+
+        let mut remote_ips: Vec<String> = vec![];
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            remote_ips.push(line);
         }
-
-
-        let sleeptime = time::Duration::from_millis(1000);
 
         let mut streams = vec![];
         let mut ips_connected = vec![];
-        while ips_connected.len() != remote_ips.clone().len(){
-            thread::sleep(sleeptime);
-            for (i,remote_ip) in remote_ips.clone().iter().enumerate(){
-                if !(ips_connected.contains(&i)){
-                    let stream = TcpStream::connect(remote_ip.clone()).await;
-                    match stream{
-                        Ok(stream)=> {
+        while ips_connected.len() != remote_ips.len() {
+            sleep(SLEEP_DURATION).await;
+            for (i, remote_ip) in remote_ips.iter().enumerate() {
+                if !(ips_connected.contains(&i)) {
+                    let stream = TcpStream::connect(remote_ip).await;
+                    match stream {
+                        Ok(stream) => {
                             streams.push(stream);
-                            ips_connected.push(i.clone());
-                        },
-                        Err(e)=> println!("{}",e.to_string()),
-                    }; 
-                }   
+                            ips_connected.push(i);
+                        }
+                        Err(e) => println!("{}", e.to_string()),
+                    };
+                }
             }
         }
 
-        let mut buffer = vec![0;1];
+        let mut buffer = vec![0; 1];
 
-        buffer[0] = start_command;
+        buffer[0] = SHUTDOWN_CMD;
 
-        for mut stream in streams{
-            stream.write(&buffer).await?;
-        }
-    }
-
-    if command == "stop"{
-
-        let pathremoteips = "/ips.txt";
-
-        let file = OpenOptions::new().read(true).open(&pathremoteips).expect("file not found");
-    
-        let reader = BufReader::new(file);
-    
-        let lines = reader.lines();
-    
-        let mut remote_ips = vec![];
-    
-        for line in lines{
-            remote_ips.push(line.unwrap());
-        }
-
-
-        let sleeptime = time::Duration::from_millis(1000);
-
-        let mut streams = vec![];
-        let mut ips_connected = vec![];
-        while ips_connected.len() != remote_ips.clone().len(){
-            thread::sleep(sleeptime);
-            for (i,remote_ip) in remote_ips.clone().iter().enumerate(){
-                if !(ips_connected.contains(&i)){
-                    let stream = TcpStream::connect(remote_ip.clone()).await;
-                    match stream{
-                        Ok(stream)=> {
-                            streams.push(stream);
-                            ips_connected.push(i.clone());
-                        },
-                        Err(e)=> println!("{}",e.to_string()),
-                    }; 
-                }   
-            }
-        }
-
-        let mut buffer = vec![0;1];
-
-        buffer[0] = shutdown_command;
-
-        for mut stream in streams{
+        for mut stream in streams {
             stream.write(&buffer).await?;
         }
     }
