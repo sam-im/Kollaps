@@ -76,7 +76,7 @@ impl Emulation {
         let _ = self.tx.send(EmulationCmd::Reconnect).await;
     }
     pub async fn teardown(&self) {
-        let _ = self.tx.send(EmulationCmd::Teardown);
+        let _ = self.tx.send(EmulationCmd::Teardown).await;
     }
 }
 
