@@ -79,6 +79,8 @@ impl Dijkstraentry {
     }
 }
 
+// TODO consider inlining, that way tracing will also point to the module
+// the error has occured, or better yet use the panic macro
 pub fn print_and_fail(message: String) {
     error!("{}", message);
     let sleeptime = time::Duration::from_millis(500);

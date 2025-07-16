@@ -16,22 +16,20 @@
 use crate::aux::convert_to_int;
 use crate::aux::print_and_fail;
 use crate::eventscheduler::EventScheduler;
-use crate::state::State;
+use crate::graph::Graph;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
-use random_string::generate;
+use random_string::{charsets, generate};
 use regex::Regex;
-use roxmltree::Node;
+use roxmltree::{Document, Node};
 use std::f32::INFINITY;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::error;
 use tracing::warn;
 
 pub struct XMLGraphParser {
-    state: Arc<Mutex<State>>,
     mode: String,
     pub ips: Vec<String>,
     pub controller_ip: String,
@@ -41,9 +39,8 @@ pub struct XMLGraphParser {
 }
 
 impl XMLGraphParser {
-    pub fn new(state: Arc<Mutex<State>>, mode: String) -> XMLGraphParser {
-        XMLGraphParser {
-            state: state,
+    pub fn new<'a>(mode: String) -> Self {
+        Self {
             mode: mode,
             ips: vec![],
             controller_ip: "".to_string(),
@@ -53,86 +50,83 @@ impl XMLGraphParser {
         }
     }
 
-    pub async fn fill_graph<'a>(&mut self, root: Node<'a, 'a>) {
+    /// Create and fill a `Graph` according to the supplied topology XML `roxmltree::Document`.
+    /// Current implementation uses the returned graph as the initial graph for `State`.
+    pub async fn fill_graph<'a>(&mut self, doc: &Document<'a>) -> Graph {
+        let mut graph = Graph::new();
+
+        let root = doc.root().first_child().unwrap();
+
         if root.tag_name().name() != "experiment" {
-            error!("Not a valid Kollap topology file, root is not 'experiment'");
-            std::process::exit(0);
+            panic!("Not a valid Kollap topology file, root is not 'experiment'");
         }
 
         if !root.has_attribute("boot") {
-            print_and_fail(
-                "<experiment boot = > The experiment needs a valid boostrapper image name"
-                    .to_string(),
-            );
-            return;
+            panic!("<experiment boot = > The experiment needs a valid boostrapper image name");
         }
 
         let mut config: Option<Node> = None;
-
         let mut services: Option<Node> = None;
-
         let mut bridges: Option<Node> = None;
-
         let mut links: Option<Node> = None;
-
         let mut dynamic: Option<Node> = None;
 
-        for node in root.children() {
-            if !node.is_element() {
-                continue;
-            }
+        root.children()
+            .into_iter()
+            .filter(|node| node.is_element())
+            .for_each(|node| match node.tag_name().name() {
+                "config" => {
+                    if config.is_none() {
+                        config = Some(node);
+                    }
+                }
+                "services" => {
+                    if services.is_some() {
+                        panic!("Only one <services> block is allowed.");
+                    }
+                    services = Some(node);
+                }
+                "bridges" => {
+                    if bridges.is_some() {
+                        panic!("Only one <bridges> block is allowed.");
+                    }
+                    bridges = Some(node);
+                }
+                "links" => {
+                    if links.is_some() {
+                        panic!("Only one <links> block is allowed.");
+                    }
+                    links = Some(node);
+                }
+                "dynamic" => {
+                    if dynamic.is_some() {
+                        panic!("Only one <dynamic> block is allowed.");
+                    }
+                    dynamic = Some(node);
+                }
+                _ => (),
+            });
 
-            if node.tag_name().name() == "config" {
-                if !config.is_none() {
-                    continue;
-                }
-                config = Some(node);
-            }
-            if node.tag_name().name() == "services" {
-                if !services.is_none() {
-                    print_and_fail("Only one <services> block is allowed.".to_string());
-                }
-                services = Some(node);
-            }
-            if node.tag_name().name() == "bridges" {
-                if !bridges.is_none() {
-                    print_and_fail("Only one <bridges> block is allowed.".to_string());
-                }
-                bridges = Some(node);
-            }
-            if node.tag_name().name() == "links" {
-                if !links.is_none() {
-                    print_and_fail("Only one <links> block is allowed.".to_string());
-                }
-                links = Some(node);
-            }
-            if node.tag_name().name() == "dynamic" {
-                if !dynamic.is_none() {
-                    print_and_fail("Only one <dynamic> block is allowed.".to_string());
-                }
-                dynamic = Some(node);
-            }
+        if config.is_some() {
+            self.parse_config(config.unwrap());
         }
 
-        if !config.is_none() {
-            self.parse_config(config.unwrap()).await;
+        self.parse_services(
+            services.expect("declared services in topology file"),
+            dynamic,
+            &mut graph,
+        ).await;
+
+        if bridges.is_some() {
+            self.parse_bridges(bridges.unwrap(), &mut graph);
         }
 
-        if services.is_none() {
-            print_and_fail("No services declared in topology".to_string());
-        }
-        self.parse_services(services.unwrap(), dynamic).await;
+        self.parse_links(links.expect("declared links in topology file"), &mut graph).await;
 
-        if !bridges.is_none() {
-            self.parse_bridges(bridges.unwrap()).await;
-        }
-        if links.is_none() {
-            print_and_fail("No links declared in topology".to_string());
-        }
-        self.parse_links(links.unwrap()).await;
+        return graph;
     }
 
-    pub async fn parse_config<'a>(&mut self, config: Node<'a, 'a>) {
+    pub fn parse_config<'a>(&mut self, config: Node<'a, 'a>) {
         for property in config.children() {
             if !property.is_element() {
                 continue;
@@ -158,6 +152,7 @@ impl XMLGraphParser {
         &mut self,
         services: Node<'a, 'a>,
         dynamic: Option<Node<'a, 'a>>,
+        graph: &mut Graph,
     ) {
         for service in services.children() {
             if !service.is_element() {
@@ -185,7 +180,6 @@ impl XMLGraphParser {
             }
 
             // let mut command = "";
-
             // if service.has_attribute("command"){
             //     command = service.attribute("command").unwrap();
             // }
@@ -225,14 +219,7 @@ impl XMLGraphParser {
                 if self.mode == "container" {
                     let name = service.attribute("name").unwrap().to_string();
 
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_service(name, shared, reuse, replicas, None, paths.clone(), None)
-                        .await;
+                    graph.insert_service(name, shared, reuse, replicas, None, paths.clone(), None).await;
                 }
 
                 if self.mode == "baremetal" {
@@ -248,26 +235,18 @@ impl XMLGraphParser {
                         let ip = IpAddr::from_str(&ip.unwrap().to_string()).unwrap();
                         match ip {
                             IpAddr::V4(ipv4) => {
-                                self.state
-                                    .lock()
-                                    .await
-                                    .get_current_graph()
-                                    .lock()
-                                    .await
-                                    .insert_service(
-                                        name,
-                                        shared,
-                                        reuse,
-                                        replicas,
-                                        Some(convert_to_int(ipv4.octets())),
-                                        paths.clone(),
-                                        script,
-                                    )
-                                    .await;
+                                graph.insert_service(
+                                    name,
+                                    shared,
+                                    reuse,
+                                    replicas,
+                                    Some(convert_to_int(ipv4.octets())),
+                                    paths.clone(),
+                                    script,
+                                ).await;
                             }
-                            IpAddr::V6(_ipv6) => {
-                                error!("IPv6 is not supported");
-                                std::process::exit(0);
+                            IpAddr::V6(_) => {
+                                panic!("IPv6 is not supported");
                             }
                         }
                     }
@@ -275,23 +254,13 @@ impl XMLGraphParser {
 
                 if supervisor {
                     let name = service.attribute("name").unwrap().to_string();
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .set_dashboard(name, supervisor_port)
-                        .await;
+                    graph.set_dashboard(name, supervisor_port).await;
 
                     if self.mode == "baremetal" {
                         let controller_ip = service.attribute("controller_ip");
-                        if controller_ip.is_none() {
-                            error!("controller requries to have an IP");
-                            std::process::exit(0);
-                        } else {
-                            self.controller_ip = controller_ip.unwrap().to_string();
-                        }
+                        self.controller_ip = controller_ip
+                            .expect("controller requires an IP")
+                            .to_string();
                     }
                 }
             }
@@ -323,9 +292,8 @@ impl XMLGraphParser {
             return replicas;
         }
 
-        //first we collect the join/leave/crash/disconnect/reconnect events
-        //so we can later sort them and calculate the required replicas
-
+        // first we collect the join/leave/crash/disconnect/reconnect events
+        // so we can later sort them and calculate the required replicas
         let mut events = vec![];
 
         let join_event = 1.0;
@@ -374,8 +342,7 @@ impl XMLGraphParser {
                     }
                 }
 
-                //parse action
-
+                // parse action
                 if event.attribute("action").unwrap() == "join" {
                     has_joins = true;
                     let mut event_entry = vec![];
@@ -480,33 +447,25 @@ impl XMLGraphParser {
         }
     }
 
-    pub async fn parse_bridges<'a>(&mut self, bridges: Node<'a, 'a>) {
-        for bridge in bridges.children() {
-            if !bridge.is_element() {
-                continue;
-            }
-            if bridge.tag_name().name() != "bridge" {
-                print_and_fail(format!(
-                    "Invalid tag inside <bridges>: {}",
-                    bridge.tag_name().name()
-                ));
-            }
+    pub fn parse_bridges<'a>(&mut self, bridges: Node<'a, 'a>, graph: &mut Graph) {
+        bridges
+            .children()
+            .into_iter()
+            .filter(|b| b.is_element())
+            .for_each(|b| {
+                if b.tag_name().name() != "bridge" {
+                    panic!("Invalid tag inside <bridges>: {}", b.tag_name().name());
+                }
 
-            if !bridge.has_attribute("name") {
-                print_and_fail("A bridge needs to have a name".to_string())
-            }
+                if !b.has_attribute("name") {
+                    panic!("A bridge needs to have a name");
+                }
 
-            self.state
-                .lock()
-                .await
-                .get_current_graph()
-                .lock()
-                .await
-                .insert_bridge(bridge.attribute("name").unwrap().to_string(), None);
-        }
+                graph.insert_bridge(b.attribute("name").unwrap().to_string(), None);
+            });
     }
 
-    pub async fn parse_links<'a>(&mut self, links: Node<'a, 'a>) {
+    pub async fn parse_links<'a>(&mut self, links: Node<'a, 'a>, graph: &mut Graph) {
         for link in links.children() {
             if !link.is_element() {
                 continue;
@@ -547,25 +506,8 @@ impl XMLGraphParser {
                 }
             }
 
-            let source_node = self
-                .state
-                .lock()
-                .await
-                .get_current_graph()
-                .lock()
-                .await
-                .get_nodes(source.clone())[0]
-                .clone();
-
-            let destination_node = self
-                .state
-                .lock()
-                .await
-                .get_current_graph()
-                .lock()
-                .await
-                .get_nodes(destination.clone())[0]
-                .clone();
+            let source_node = &graph.get_nodes(source.clone())[0];
+            let destination_node = &graph.get_nodes(destination.clone())[0];
 
             let source_node_shared_link = source_node.lock().await.shared;
             let destination_node_shared_link = destination_node.lock().await.shared;
@@ -577,7 +519,6 @@ impl XMLGraphParser {
             // if self.mode == "baremetal"{
             //     network = "baremetal";
             // }
-
             let mut jitter: f32 = 0.0;
             if link.has_attribute("jitter") {
                 jitter = link.attribute("jitter").unwrap().parse().unwrap();
@@ -598,11 +539,8 @@ impl XMLGraphParser {
                 );
             }
 
-            //let bidirectional = true;
             let bidirectional = link.has_attribute("download");
-
             let has_download = link.has_attribute("download");
-
             let has_upload = link.has_attribute("upload");
 
             let mut download = 0.0;
@@ -626,290 +564,168 @@ impl XMLGraphParser {
             // }
 
             if both_shared {
-                let src_meta_bridge = self.create_meta_bridge().await;
-                let dst_meta_bridge = self.create_meta_bridge().await;
+                let src_meta_bridge = self.create_meta_bridge(graph);
+                let dst_meta_bridge = self.create_meta_bridge(graph);
 
-                //create a link between both meta bridges
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
+                // create a link between both meta bridges
+                graph.insert_link(
+                    latency,
+                    jitter,
+                    drop,
+                    upload,
+                    src_meta_bridge.clone(),
+                    dst_meta_bridge.clone(),
+                ).await;
+
+                if bidirectional {
+                    graph.insert_link(
                         latency,
                         jitter,
                         drop,
-                        upload,
-                        src_meta_bridge.clone(),
+                        download,
                         dst_meta_bridge.clone(),
-                    )
-                    .await;
-
-                if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            latency,
-                            jitter,
-                            drop,
-                            download,
-                            dst_meta_bridge.clone(),
-                            src_meta_bridge.clone(),
-                        )
-                        .await;
+                        src_meta_bridge.clone(),
+                    ).await;
                 }
 
-                //connect source to src meta bridge
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
+                graph.insert_link(
+                    0.0,
+                    0.0,
+                    0.0,
+                    upload,
+                    source.clone(),
+                    src_meta_bridge.clone(),
+                ).await;
+
+                if bidirectional {
+                    graph.insert_link(
                         0.0,
                         0.0,
                         0.0,
-                        upload,
+                        download,
+                        src_meta_bridge.clone(),
                         source.clone(),
-                        src_meta_bridge.clone(),
-                    )
-                    .await;
+                    ).await;
+                }
+
+                graph.insert_link(
+                    0.0,
+                    0.0,
+                    0.0,
+                    upload,
+                    dst_meta_bridge.clone(),
+                    destination.clone(),
+                ).await;
 
                 if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            0.0,
-                            0.0,
-                            0.0,
-                            download,
-                            src_meta_bridge.clone(),
-                            source.clone(),
-                        )
-                        .await;
-                }
-                //connect destination to dst meta bridge
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
+                    graph.insert_link(
                         0.0,
                         0.0,
                         0.0,
-                        upload,
-                        dst_meta_bridge.clone(),
+                        download,
                         destination.clone(),
-                    )
-                    .await;
-                if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            0.0,
-                            0.0,
-                            0.0,
-                            download,
-                            destination.clone(),
-                            dst_meta_bridge.clone(),
-                        )
-                        .await;
+                        dst_meta_bridge.clone(),
+                    ).await;
                 }
             } else if source_node_shared_link {
-                let meta_bridge = self.create_meta_bridge().await;
+                let meta_bridge = self.create_meta_bridge(graph);
 
-                //create a link between meta bridge and destination
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
+                graph.insert_link(
+                    latency,
+                    jitter,
+                    drop,
+                    upload,
+                    meta_bridge.clone(),
+                    destination.clone(),
+                ).await;
+
+                if bidirectional {
+                    graph.insert_link(
                         latency,
                         jitter,
                         drop,
-                        upload,
-                        meta_bridge.clone(),
+                        download,
                         destination.clone(),
-                    )
-                    .await;
-                if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            latency,
-                            jitter,
-                            drop,
-                            download,
-                            destination.clone(),
-                            meta_bridge.clone(),
-                        )
-                        .await;
+                        meta_bridge.clone(),
+                    ).await;
                 }
 
-                //connect origin to meta bridge
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(0.0, 0.0, 0.0, upload, source.clone(), meta_bridge.clone())
-                    .await;
+                graph.insert_link(0.0, 0.0, 0.0, upload, source.clone(), meta_bridge.clone()).await;
 
                 if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(0.0, 0.0, 0.0, download, meta_bridge.clone(), source.clone())
-                        .await;
+                    graph.insert_link(0.0, 0.0, 0.0, download, meta_bridge.clone(), source.clone()).await;
                 }
             } else if destination_node_shared_link {
-                let meta_bridge = self.create_meta_bridge().await;
-                //create a link between origin and meta bridge
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
+                let meta_bridge = self.create_meta_bridge(graph);
+                graph.insert_link(
+                    latency,
+                    jitter,
+                    drop,
+                    upload,
+                    source.clone(),
+                    meta_bridge.clone(),
+                ).await;
+
+                if bidirectional {
+                    graph.insert_link(
                         latency,
                         jitter,
                         drop,
-                        upload,
-                        source.clone(),
+                        download,
                         meta_bridge.clone(),
-                    )
-                    .await;
-
-                if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            latency,
-                            jitter,
-                            drop,
-                            download,
-                            meta_bridge.clone(),
-                            source.clone(),
-                        )
-                        .await;
+                        source.clone(),
+                    ).await;
                 }
 
-                //connect meta bridge to destination
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
-                        0.0,
-                        0.0,
-                        0.0,
-                        upload,
-                        meta_bridge.clone(),
-                        destination.clone(),
-                    )
-                    .await;
+                graph.insert_link(
+                    0.0,
+                    0.0,
+                    0.0,
+                    upload,
+                    meta_bridge.clone(),
+                    destination.clone(),
+                ).await;
 
                 if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            0.0,
-                            0.0,
-                            0.0,
-                            download,
-                            destination.clone(),
-                            meta_bridge.clone(),
-                        )
-                        .await;
+                    graph.insert_link(
+                        0.0,
+                        0.0,
+                        0.0,
+                        download,
+                        destination.clone(),
+                        meta_bridge.clone(),
+                    ).await;
                 }
             } else {
-                self.state
-                    .lock()
-                    .await
-                    .get_current_graph()
-                    .lock()
-                    .await
-                    .insert_link(
+                graph.insert_link(
+                    latency,
+                    jitter,
+                    drop,
+                    upload,
+                    source.clone(),
+                    destination.clone(),
+                ).await;
+
+                if bidirectional {
+                    graph.insert_link(
                         latency,
                         jitter,
                         drop,
-                        upload,
-                        source.clone(),
+                        download,
                         destination.clone(),
-                    )
-                    .await;
-
-                if bidirectional {
-                    self.state
-                        .lock()
-                        .await
-                        .get_current_graph()
-                        .lock()
-                        .await
-                        .insert_link(
-                            latency,
-                            jitter,
-                            drop,
-                            download,
-                            destination.clone(),
-                            source.clone(),
-                        )
-                        .await;
+                        source.clone(),
+                    ).await;
                 }
             }
         }
     }
 
-    pub async fn create_meta_bridge(&mut self) -> String {
-        let charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        let string = generate(5, charset);
+    pub fn create_meta_bridge(&mut self, graph: &mut Graph) -> String {
+        let random_name = generate(5, charsets::ALPHANUMERIC);
 
-        self.state
-            .lock()
-            .await
-            .get_current_graph()
-            .lock()
-            .await
-            .insert_bridge(string.clone(), None);
+        graph.insert_bridge(random_name.clone(), None);
 
-        return string;
+        return random_name;
     }
 
     pub fn parse_bandwidth(&self, bandwidth: String) -> f32 {
@@ -930,23 +746,27 @@ impl XMLGraphParser {
                 return base * 1000.0 * 1000.0 * 1000.0 * multi;
             }
         } else {
-            //print and fail
+            // print and fail
             return 0.0;
         }
         return 0.0;
     }
 
     pub async fn parse_schedule<'a>(
-        &mut self,
+        &self,
         scheduler: Arc<Mutex<EventScheduler>>,
-        root: Node<'a, 'a>,
+        tree: &Document<'a>,
     ) {
+        let root = tree.root().first_child().unwrap();
+
         let mut scheduler = scheduler.lock().await;
-        let state = self.state.lock().await;
-        let _current_graph = state.get_current_graph(); // temp binding
-        let current_graph = _current_graph.lock().await;
-        let _current_graph_root = current_graph.graph_root.clone().unwrap(); // temp binding
-        let current_graph_root = _current_graph_root.lock().await;
+        let state_handle = scheduler.state.clone();
+        let state = state_handle.lock().await;
+
+        let graph_handle = state.get_current_graph(); // temp binding
+        let graph = graph_handle.lock().await;
+        let graph_root_handle = graph.graph_root.clone().unwrap(); // temp binding
+        let graph_root = graph_root_handle.lock().await;
 
         let mut dynamic = None;
 
@@ -974,7 +794,7 @@ impl XMLGraphParser {
 
         let mut replicas = vec![];
 
-        for _i in 0..current_graph_root.replicas {
+        for _i in 0..graph_root.replicas {
             let mut element = vec![];
 
             element.push(false);
@@ -1014,7 +834,7 @@ impl XMLGraphParser {
                 let node_name = event.attribute("name").unwrap().to_string();
 
                 let mut bridge_names = vec![];
-                for (name, _bridges) in current_graph.bridges_by_name.iter() {
+                for (name, _bridges) in graph.bridges_by_name.iter() {
                     bridge_names.push(name.clone());
                 }
 
@@ -1032,7 +852,7 @@ impl XMLGraphParser {
                     }
                 }
 
-                if node_name != current_graph_root.hostname {
+                if node_name != graph_root.hostname {
                     continue;
                 }
 
@@ -1051,11 +871,11 @@ impl XMLGraphParser {
                         let mut id: usize;
 
                         loop {
-                            id = rng.random_range(0..current_graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root.replicas) as usize;
 
                             available = !replicas[id][joined];
 
-                            if !current_graph_root.reuse {
+                            if !graph_root.reuse {
                                 available = available && !replicas[id][used];
                             }
                             if available {
@@ -1063,15 +883,15 @@ impl XMLGraphParser {
                             }
                         }
 
-                        //mark the state
+                        // mark the state
                         replicas[id][joined] = true;
 
-                        if !current_graph_root.reuse {
+                        if !graph_root.reuse {
                             replicas[id][used] = true;
                         }
 
-                        //if it is us
-                        if current_graph_root.replica_id == id {
+                        // if it is us
+                        if graph_root.replica_id == id {
                             scheduler.schedule_join(time);
                         }
 
@@ -1088,7 +908,7 @@ impl XMLGraphParser {
                         let mut id: usize;
 
                         loop {
-                            id = rng.random_range(0..current_graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root.replicas) as usize;
 
                             up = replicas[id][joined];
 
@@ -1099,7 +919,7 @@ impl XMLGraphParser {
 
                         replicas[id][joined] = false;
 
-                        if current_graph_root.replica_id == id {
+                        if graph_root.replica_id == id {
                             if event_type == "leave" {
                                 //Temporary fix before we change all wiki
                                 scheduler.schedule_crash(time);
@@ -1123,7 +943,7 @@ impl XMLGraphParser {
                         let mut id;
 
                         loop {
-                            id = rng.random_range(0..current_graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root.replicas) as usize;
 
                             disconnected_bool = replicas[id][disconnected];
 
@@ -1133,7 +953,7 @@ impl XMLGraphParser {
                         }
 
                         replicas[id][disconnected] = false;
-                        if current_graph_root.replica_id == id {
+                        if graph_root.replica_id == id {
                             scheduler.schedule_reconnect(time);
                         }
                     }
@@ -1146,7 +966,7 @@ impl XMLGraphParser {
                         let mut id;
 
                         loop {
-                            id = rng.random_range(0..current_graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root.replicas) as usize;
 
                             connected = replicas[id][joined] && !(replicas[id][disconnected]);
 
@@ -1157,7 +977,7 @@ impl XMLGraphParser {
 
                         replicas[id][disconnected] = true;
 
-                        if current_graph_root.replica_id == id {
+                        if graph_root.replica_id == id {
                             scheduler.schedule_disconnect(time);
                         }
                     }

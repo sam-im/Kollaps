@@ -33,7 +33,7 @@ pub struct State {
     pub active_paths: Vec<Arc<Mutex<Path>>>, //paths that this container sent bytes to
     pub active_paths_ids: Vec<u32>,
     pub name: String,
-    pub emulation: Emulation, // Sender to Emulation (TCAL client)
+    pub tcal_client: Emulation,
     pub id: String,
     pub link_count: u32,
     pub max_age: u32,
@@ -49,7 +49,7 @@ impl State {
             active_paths: vec![],
             active_paths_ids: vec![],
             name: "".to_string(),
-            emulation: Emulation::new(),
+            tcal_client: Emulation::new(),
             id: id,
             link_count: 0,
             max_age: 2,
@@ -63,7 +63,7 @@ impl State {
         let current_graph = current_graph_handle.lock().await;
         let current_graph_root = current_graph.graph_root.as_ref().unwrap().lock().await;
 
-        self.emulation.init(ip, 7073).await;
+        self.tcal_client.init(ip, 7073).await;
 
         let ip_to_path_id = current_graph.ip_to_path_id.clone();
 
@@ -109,7 +109,7 @@ impl State {
                         self.name.clone(),
                         format!("disabled due to no links path to {} with ip {}", finish, ip),
                     );
-                    self.emulation.disable_path(ip).await;
+                    self.tcal_client.disable_path(ip).await;
                 // else is a path to another container
                 } else {
                     print_message(
@@ -119,7 +119,7 @@ impl State {
                             start, finish, latency, links, bandwidth, drop
                         ),
                     );
-                    self.emulation
+                    self.tcal_client
                         .enable_path(ip, bandwidth, latency, jitter, drop)
                         .await;
                     opened_paths.push(service_name.clone());
@@ -138,7 +138,7 @@ impl State {
                         self.name.clone(),
                         format!("Disabled due to no path to {} with name {}", ip, name),
                     );
-                    self.emulation.disable_path(ip).await;
+                    self.tcal_client.disable_path(ip).await;
                 }
             }
         }
@@ -171,10 +171,10 @@ impl State {
                 let drop = p.drop;
 
                 if p.links.is_empty() {
-                    self.emulation.disable_path(ip).await;
+                    self.tcal_client.disable_path(ip).await;
                 // else is a path to another container
                 } else {
-                    self.emulation
+                    self.tcal_client
                         .enable_path(ip, bandwidth, latency, jitter, drop)
                         .await;
                     opened_paths.push(service_name);
@@ -205,10 +205,10 @@ impl State {
                     let drop = p.drop;
 
                     if p.links.is_empty() {
-                        self.emulation.disable_path(*ip).await;
+                        self.tcal_client.disable_path(*ip).await;
                     // else is a path to another container
                     } else {
-                        self.emulation
+                        self.tcal_client
                             .enable_path(*ip, bandwidth, latency, jitter, drop)
                             .await;
                     }
@@ -223,6 +223,16 @@ impl State {
 
         for graph in self.graphs.iter_mut() {
             graph.lock().await.link_count = link_count
+        }
+    }
+
+    pub fn insert_initial_graph(&mut self, graph: Graph) {
+        let graph = Arc::new(Mutex::new(graph));
+        if self.graphs.is_empty() && self.graph_counter.eq(&0) {
+            self.graphs.push(graph);
+            self.graph_counter += 1;
+        } else {
+            panic!("do not use this function to insert any other graph than the initial graph")
         }
     }
 
@@ -355,7 +365,7 @@ impl State {
                         self.name.clone(),
                         format!("Blocked path from {} to {}", start, finish),
                     );
-                    self.emulation.set_loss(*ip, 1.0).await;
+                    self.tcal_client.set_loss(*ip, 1.0).await;
                 }
             }
         }
@@ -429,10 +439,10 @@ impl State {
                             let new_jitter = new_path.jitter;
                             let new_loss = new_path.drop;
                             //print_message(self.name.clone(),format!("Changed path from {} to {} and new latency is {} and new drop is {}",start,finish,new_latency.clone(),new_loss.clone()));
-                            self.emulation.set_loss(*ip, new_loss).await;
+                            self.tcal_client.set_loss(*ip, new_loss).await;
 
                             if new_latency != 0.0 {
-                                self.emulation
+                                self.tcal_client
                                     .set_latency(*ip, new_latency, new_jitter)
                                     .await;
                             }
@@ -464,10 +474,10 @@ impl State {
                             start, finish, new_latency, new_loss
                         ),
                     );
-                    self.emulation.set_loss(*ip, new_loss).await;
+                    self.tcal_client.set_loss(*ip, new_loss).await;
 
                     if new_latency != 0.0 {
-                        self.emulation
+                        self.tcal_client
                             .set_latency(*ip, new_latency, new_jitter)
                             .await;
                     }
@@ -661,7 +671,9 @@ impl State {
                 //call tc to change
                 let new_bandwidth = path.current_bandwidth;
 
-                self.emulation.set_bandwidth(ip, new_bandwidth as u32).await;
+                self.tcal_client
+                    .set_bandwidth(ip, new_bandwidth as u32)
+                    .await;
             }
         }
 

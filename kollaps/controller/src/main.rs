@@ -13,16 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use emulationcore::state::State;
 use emulationcore::xmlgraphparser::XMLGraphParser;
 use roxmltree::Document;
 use std::env;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 const SHUTDOWN_CMD: u8 = 2;
@@ -48,18 +45,13 @@ fn main() -> Result<()> {
 
 async fn process_command(topology_file: String, command: String) -> Result<()> {
     if command == "ready" {
-        let state = Arc::new(Mutex::new(State::new("controller".to_string())));
-        state.lock().await.insert_graph().await;
-
-        let mut parser = XMLGraphParser::new(state, "baremetal".to_string());
         let text = std::fs::read_to_string(topology_file)?;
         let doc = Document::parse(&text)?;
-        let root = doc.root().first_child().unwrap();
 
-        parser.fill_graph(root).await;
+        let mut parser = XMLGraphParser::new("baremetal".to_string());
+        let _ = parser.fill_graph(&doc).await;
 
         let mut remote_ips = vec![];
-
         let ips = parser.ips.clone();
 
         let mut file = OpenOptions::new()

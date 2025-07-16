@@ -296,8 +296,7 @@ impl EventScheduler {
             .get_graph_most_recent()
             .lock()
             .await
-            .insert_link(latency, jitter, drop, bandwidth, origin, destination)
-            .await;
+            .insert_link(latency, jitter, drop, bandwidth, origin, destination).await;
 
         let event = Event::new(1, time);
 
@@ -398,63 +397,64 @@ impl EventScheduler {
         self.events
             .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
     }
-}
 
-pub async fn start(es_handle: Arc<Mutex<EventScheduler>>) {
-    info!("EC {}: started experiment", es_handle.lock().await.name);
-    let now = Instant::now();
-    let mut count = 0;
+    pub async fn start(&mut self) {
+        info!("EC {}: started experiment", self.name);
+        let now = Instant::now();
+        let mut count = 0;
 
-    loop {
-        let es = es_handle.lock().await;
-        if now.elapsed().as_millis() >= (es.events[count].time * 1000.0) as u128 {
-            if es.events[count].id == 0 {
-                let id = es.state.lock().await.id.clone();
+        loop {
+            // TODO use tokio's sleep_until
+            if now.elapsed().as_millis() >= (self.events[count].time * 1000.0) as u128 {
+                if self.events[count].id == 0 {
+                    let id = self.state.lock().await.id.clone();
 
-                if es.orchestrator == "baremetal" {
-                    if es.script != "" {
-                        info!(
-                            "EC {}: started script with name {}",
-                            es.name,
-                            es.script.clone()
-                        );
-                        start_script(es.script.clone());
+                    if self.orchestrator == "baremetal" {
+                        if self.script != "" {
+                            info!(
+                                "EC {}: started script with name {}",
+                                self.name,
+                                self.script.clone()
+                            );
+                            start_script(self.script.clone());
+                        }
+                    } else {
+                        tokio::spawn(async move { start_experiment(id).await });
+                        info!("EC {}: started my script", self.name);
                     }
-                } else {
-                    tokio::spawn(async move { start_experiment(id).await });
-                    info!("EC {}: started my script", es.name);
+                    //task::spawn(start_experiment(self.state.lock().unwrap().id.clone()));
                 }
-                //task::spawn(start_experiment(self.state.lock().unwrap().id.clone()));
-            }
 
-            if es.events[count].id == 3 {
-                stop_experiment(es.pid.clone(), 3);
-            }
-            if es.events[count].id == 2 {
-                stop_experiment(es.pid.clone(), 2);
-            }
-            if es.events[count].id == 1 {
-                es.state.lock().await.increment_age().await;
-            }
+                if self.events[count].id == 3 {
+                    stop_experiment(self.pid.clone(), 3);
+                }
+                if self.events[count].id == 2 {
+                    stop_experiment(self.pid, 2);
+                }
+                if self.events[count].id == 1 {
+                    self.state.lock().await.increment_age().await;
+                }
 
-            if es.events[count].id == 4 {
-                es.state.lock().await.emulation.disconnect().await;
-            }
+                if self.events[count].id == 4 {
+                    self.state.lock().await.tcal_client.disconnect().await;
+                }
 
-            if es.events[count].id == 5 {
-                es.state.lock().await.emulation.reconnect().await;
+                if self.events[count].id == 5 {
+                    self.state.lock().await.tcal_client.reconnect().await;
+                }
+                if count == self.events.len() - 1 {
+                    info!("EC {}: all events concluded", self.name);
+                    break;
+                }
+                count = count + 1;
             }
-            if count == es.events.len() - 1 {
-                info!("EC {}: all events concluded", es.name);
-                break;
-            }
-            count = count + 1;
+            // TODO also remove this if you use sleep_until above
+            tokio::time::sleep(Duration::from_secs_f32(0.5)).await;
         }
-        drop(es);
-        tokio::time::sleep(Duration::from_secs_f32(0.5)).await;
     }
 }
 
+// TODO use an enum, e.g. EventType, instead of event ids
 pub struct Event {
     pub id: u32,
     pub time: f32,

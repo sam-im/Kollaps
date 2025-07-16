@@ -66,14 +66,14 @@ impl EmulationCore {
             id: id,
             ip: 0,
             name: "".to_string(),
-            state: state,
+            state,
             pid: pid,
             comms: communication,
             lasttime: None,
             usages: Arc::new(Mutex::new(HashMap::new())),
             pool_period: 0.05,
             link_count: 0,
-            orchestrator: orchestrator,
+            orchestrator,
             cm_file: "".to_string(),
             topology_file: "".to_string(),
             networkdevice: "".to_string(),
@@ -98,24 +98,17 @@ impl EmulationCore {
     }
 
     pub async fn init_baremetal(&mut self) {
-        print_message(self.name.clone(), "STARTED BOOTSTRAPPING EC".to_string());
-
-        //Create the initial graph
-        self.state.lock().await.insert_graph().await;
-        self.state.lock().await.name = self.name.clone();
-
-        let mut parser = XMLGraphParser::new(self.state.clone(), "baremetal".to_string());
+        info!("EC {}: started boostrapping EC", self.name);
 
         let text = std::fs::read_to_string(self.topology_file.clone()).unwrap();
-
         let doc = Document::parse(&text).unwrap();
 
-        let root = doc.root().first_child().unwrap();
+        let mut parser = XMLGraphParser::new("baremetal".to_string());
+        let graph = parser.fill_graph(&doc).await;
 
-        //Parses topology
-        parser.fill_graph(root.clone()).await;
-
-        //Collect config properties
+        // Collect parsed graph and config properties
+        self.state.lock().await.insert_initial_graph(graph);
+        self.state.lock().await.name = self.name.clone();
 
         self.shortest_path_type = parser.shortest_path_type.to_string();
 
@@ -159,7 +152,7 @@ impl EmulationCore {
 
         self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
 
-        parser.parse_schedule(self.scheduler.clone(), root).await;
+        parser.parse_schedule(self.scheduler.clone(), &doc).await;
         self.scheduler.lock().await.sort_events();
         self.scheduler.lock().await.pid = self.pid;
 
@@ -227,15 +220,13 @@ impl EmulationCore {
 
     pub async fn init(&mut self) {
         //Parse the topology
-        self.state.lock().await.insert_graph().await;
-
-        let mut parser = XMLGraphParser::new(self.state.clone(), "container".to_string());
         let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
         let doc = Document::parse(&text).unwrap();
-        let root = doc.root().first_child().unwrap();
-        parser.fill_graph(root.clone()).await;
+        let mut parser = XMLGraphParser::new("container".to_string());
+        let graph = parser.fill_graph(&doc).await;
 
-        //Collect config properties
+        // Collect parsed graph and properties
+        self.state.lock().await.insert_initial_graph(graph);
         self.shortest_path_type = parser.shortest_path_type.to_string();
         self.pool_period = parser.pool_period;
         self.max_age = parser.max_age;
@@ -274,9 +265,7 @@ impl EmulationCore {
         self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
 
         //Parse dynamic events
-        parser
-            .parse_schedule(self.scheduler.clone(), root.clone())
-            .await;
+        parser.parse_schedule(self.scheduler.clone(), &doc).await;
         self.scheduler.lock().await.sort_events();
         self.state.lock().await.shrink_maps().await;
         self.scheduler.lock().await.pid = self.pid;
@@ -593,7 +582,7 @@ async fn receive_commands(
 
 //Start the experiment
 async fn start_events(es_handle: Arc<Mutex<EventScheduler>>) {
-    crate::eventscheduler::start(es_handle).await;
+    es_handle.lock().await.start().await;
 }
 
 pub async fn resolve_hostnames_kubernetes(graph: Arc<Mutex<Graph>>) -> Result<()> {
@@ -699,7 +688,7 @@ async fn receive_commands_baremetal(
                     .state
                     .lock()
                     .await
-                    .emulation
+                    .tcal_client
                     .teardown()
                     .await;
                 info!("Called teardown() on TCAL");
