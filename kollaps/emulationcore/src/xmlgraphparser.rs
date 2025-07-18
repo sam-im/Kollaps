@@ -15,18 +15,16 @@
 
 use crate::aux::convert_to_int;
 use crate::aux::print_and_fail;
-use crate::eventscheduler::EventScheduler;
+use crate::eventscheduler;
+use crate::eventscheduler::Event;
 use crate::graph::Graph;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
 use random_string::{charsets, generate};
 use regex::Regex;
 use roxmltree::{Document, Node};
-use std::f32::INFINITY;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::warn;
 
 pub struct XMLGraphParser {
@@ -39,7 +37,7 @@ pub struct XMLGraphParser {
 }
 
 impl XMLGraphParser {
-    pub fn new<'a>(mode: String) -> Self {
+    pub fn new(mode: String) -> Self {
         Self {
             mode: mode,
             ips: vec![],
@@ -51,7 +49,7 @@ impl XMLGraphParser {
     }
 
     /// Create and fill a `Graph` according to the supplied topology XML `roxmltree::Document`.
-    /// Current implementation uses the returned graph as the initial graph for `State`.
+    /// Current implementation uses the returned graph as the initial graph for `parse_schedule`.
     pub async fn fill_graph<'a>(&mut self, doc: &Document<'a>) -> Graph {
         let mut graph = Graph::new();
 
@@ -72,7 +70,6 @@ impl XMLGraphParser {
         let mut dynamic: Option<Node> = None;
 
         root.children()
-            .into_iter()
             .filter(|node| node.is_element())
             .for_each(|node| match node.tag_name().name() {
                 "config" => {
@@ -107,26 +104,28 @@ impl XMLGraphParser {
                 _ => (),
             });
 
-        if config.is_some() {
-            self.parse_config(config.unwrap());
+        if let Some(config) = config {
+            self.parse_config(config);
         }
 
         self.parse_services(
             services.expect("declared services in topology file"),
             dynamic,
             &mut graph,
-        ).await;
+        )
+        .await;
 
-        if bridges.is_some() {
-            self.parse_bridges(bridges.unwrap(), &mut graph);
+        if let Some(bridges) = bridges {
+            self.parse_bridges(bridges, &mut graph);
         }
 
-        self.parse_links(links.expect("declared links in topology file"), &mut graph).await;
+        self.parse_links(links.expect("declared links in topology file"), &mut graph)
+            .await;
 
-        return graph;
+        graph
     }
 
-    pub fn parse_config<'a>(&mut self, config: Node<'a, 'a>) {
+    fn parse_config<'a>(&mut self, config: Node<'a, 'a>) {
         for property in config.children() {
             if !property.is_element() {
                 continue;
@@ -148,7 +147,7 @@ impl XMLGraphParser {
         }
     }
 
-    pub async fn parse_services<'a>(
+    async fn parse_services<'a>(
         &mut self,
         services: Node<'a, 'a>,
         dynamic: Option<Node<'a, 'a>>,
@@ -158,21 +157,19 @@ impl XMLGraphParser {
             if !service.is_element() {
                 continue;
             }
-            if !(service.tag_name().name() == "service") {
+            if service.tag_name().name() != "service" {
                 print_and_fail(format!(
                     "Invalid tag inside <services> {}",
                     service.tag_name().name()
                 ));
             }
-            if self.mode == "container" {
-                if !service.has_attribute("name") || !service.has_attribute("image") {
-                    print_and_fail("A service needs a name and an image attribute.".to_string());
-                }
+            if self.mode == "container"
+                && (!service.has_attribute("name") || !service.has_attribute("image"))
+            {
+                print_and_fail("A service needs a name and an image attribute.".to_string());
             }
-            if self.mode == "baremetal" {
-                if !service.has_attribute("name") {
-                    print_and_fail("A service needs a name".to_string());
-                }
+            if self.mode == "baremetal" && !service.has_attribute("name") {
+                print_and_fail("A service needs a name".to_string());
             }
             let mut paths: Vec<String> = vec![];
             if service.has_attribute("activepaths") {
@@ -219,7 +216,9 @@ impl XMLGraphParser {
                 if self.mode == "container" {
                     let name = service.attribute("name").unwrap().to_string();
 
-                    graph.insert_service(name, shared, reuse, replicas, None, paths.clone(), None).await;
+                    graph
+                        .insert_service(name, shared, reuse, replicas, None, paths.clone(), None)
+                        .await;
                 }
 
                 if self.mode == "baremetal" {
@@ -229,21 +228,22 @@ impl XMLGraphParser {
 
                     let ip = service.attribute("ip");
 
-                    if ip.is_none() {
-                    } else {
-                        self.ips.push(ip.unwrap().to_string());
-                        let ip = IpAddr::from_str(&ip.unwrap().to_string()).unwrap();
+                    if let Some(ip) = ip {
+                        self.ips.push(ip.to_string());
+                        let ip = IpAddr::from_str(ip).unwrap();
                         match ip {
                             IpAddr::V4(ipv4) => {
-                                graph.insert_service(
-                                    name,
-                                    shared,
-                                    reuse,
-                                    replicas,
-                                    Some(convert_to_int(ipv4.octets())),
-                                    paths.clone(),
-                                    script,
-                                ).await;
+                                graph
+                                    .insert_service(
+                                        name,
+                                        shared,
+                                        reuse,
+                                        replicas,
+                                        Some(convert_to_int(ipv4.octets())),
+                                        paths.clone(),
+                                        script,
+                                    )
+                                    .await;
                             }
                             IpAddr::V6(_) => {
                                 panic!("IPv6 is not supported");
@@ -267,7 +267,7 @@ impl XMLGraphParser {
         }
     }
 
-    pub fn process_active_paths(&mut self, activepaths: &str) -> Vec<String> {
+    fn process_active_paths(&mut self, activepaths: &str) -> Vec<String> {
         let activepaths = activepaths.replace("[", "");
         let activepaths = activepaths.replace("]", "");
 
@@ -278,10 +278,10 @@ impl XMLGraphParser {
             let path = path.replace("'", "");
             vector_paths.push(path.to_string());
         }
-        return vector_paths;
+        vector_paths
     }
 
-    pub fn calculate_required_replicas(
+    fn calculate_required_replicas(
         &mut self,
         dynamic: Option<Node>,
         service: Node,
@@ -345,38 +345,23 @@ impl XMLGraphParser {
                 // parse action
                 if event.attribute("action").unwrap() == "join" {
                     has_joins = true;
-                    let mut event_entry = vec![];
-                    event_entry.push(event_time);
-                    event_entry.push(event_amount);
-                    event_entry.push(join_event);
+                    let event_entry = vec![event_time, event_amount, join_event];
                     events.push(event_entry);
                 }
                 if event.attribute("action").unwrap() == "leave" {
-                    let mut event_entry = vec![];
-                    event_entry.push(event_time);
-                    event_entry.push(event_amount);
-                    event_entry.push(leave_event);
+                    let event_entry = vec![event_time, event_amount, leave_event];
                     events.push(event_entry);
                 }
                 if event.attribute("action").unwrap() == "crash" {
-                    let mut event_entry = vec![];
-                    event_entry.push(event_time);
-                    event_entry.push(event_amount);
-                    event_entry.push(crash_event);
+                    let event_entry = vec![event_time, event_amount, crash_event];
                     events.push(event_entry);
                 }
                 if event.attribute("action").unwrap() == "disconnect" {
-                    let mut event_entry = vec![];
-                    event_entry.push(event_time);
-                    event_entry.push(event_amount);
-                    event_entry.push(disconnect_event);
+                    let event_entry = vec![event_time, event_amount, disconnect_event];
                     events.push(event_entry);
                 }
                 if event.attribute("action").unwrap() == "reconnect" {
-                    let mut event_entry = vec![];
-                    event_entry.push(event_time);
-                    event_entry.push(event_amount);
-                    event_entry.push(reconnect_event);
+                    let event_entry = vec![event_time, event_amount, reconnect_event];
                     events.push(event_entry);
                 }
             }
@@ -441,31 +426,27 @@ impl XMLGraphParser {
         }
 
         if reuse {
-            return max_replicas as u32;
+            max_replicas as u32
         } else {
-            return cumulative_replicas as u32;
+            cumulative_replicas as u32
         }
     }
 
-    pub fn parse_bridges<'a>(&mut self, bridges: Node<'a, 'a>, graph: &mut Graph) {
-        bridges
-            .children()
-            .into_iter()
-            .filter(|b| b.is_element())
-            .for_each(|b| {
-                if b.tag_name().name() != "bridge" {
-                    panic!("Invalid tag inside <bridges>: {}", b.tag_name().name());
-                }
+    fn parse_bridges<'a>(&mut self, bridges: Node<'a, 'a>, graph: &mut Graph) {
+        bridges.children().filter(|b| b.is_element()).for_each(|b| {
+            if b.tag_name().name() != "bridge" {
+                panic!("Invalid tag inside <bridges>: {}", b.tag_name().name());
+            }
 
-                if !b.has_attribute("name") {
-                    panic!("A bridge needs to have a name");
-                }
+            if !b.has_attribute("name") {
+                panic!("A bridge needs to have a name");
+            }
 
-                graph.insert_bridge(b.attribute("name").unwrap().to_string(), None);
-            });
+            graph.insert_bridge(b.attribute("name").unwrap().to_string(), None);
+        });
     }
 
-    pub async fn parse_links<'a>(&mut self, links: Node<'a, 'a>, graph: &mut Graph) {
+    async fn parse_links<'a>(&mut self, links: Node<'a, 'a>, graph: &mut Graph) {
         for link in links.children() {
             if !link.is_element() {
                 continue;
@@ -485,25 +466,23 @@ impl XMLGraphParser {
                 ));
             }
 
-            if self.mode == "container" {
-                if !link.has_attribute("origin")
+            if self.mode == "container"
+                && (!link.has_attribute("origin")
                     || !link.has_attribute("dest")
                     || !link.has_attribute("latency")
                     || !link.has_attribute("upload")
-                    || !link.has_attribute("network")
-                {
-                    print_and_fail("Incomplete network description".to_string());
-                }
+                    || !link.has_attribute("network"))
+            {
+                print_and_fail("Incomplete network description".to_string());
             }
 
-            if self.mode == "baremetal" {
-                if !link.has_attribute("origin")
+            if self.mode == "baremetal"
+                && (!link.has_attribute("origin")
                     || !link.has_attribute("dest")
                     || !link.has_attribute("latency")
-                    || !link.has_attribute("upload")
-                {
-                    print_and_fail("Incomplete network description".to_string());
-                }
+                    || !link.has_attribute("upload"))
+            {
+                print_and_fail("Incomplete network description".to_string());
             }
 
             let source_node = &graph.get_nodes(source.clone())[0];
@@ -568,167 +547,199 @@ impl XMLGraphParser {
                 let dst_meta_bridge = self.create_meta_bridge(graph);
 
                 // create a link between both meta bridges
-                graph.insert_link(
-                    latency,
-                    jitter,
-                    drop,
-                    upload,
-                    src_meta_bridge.clone(),
-                    dst_meta_bridge.clone(),
-                ).await;
-
-                if bidirectional {
-                    graph.insert_link(
+                graph
+                    .insert_link(
                         latency,
                         jitter,
                         drop,
-                        download,
-                        dst_meta_bridge.clone(),
+                        upload,
                         src_meta_bridge.clone(),
-                    ).await;
-                }
-
-                graph.insert_link(
-                    0.0,
-                    0.0,
-                    0.0,
-                    upload,
-                    source.clone(),
-                    src_meta_bridge.clone(),
-                ).await;
+                        dst_meta_bridge.clone(),
+                    )
+                    .await;
 
                 if bidirectional {
-                    graph.insert_link(
+                    graph
+                        .insert_link(
+                            latency,
+                            jitter,
+                            drop,
+                            download,
+                            dst_meta_bridge.clone(),
+                            src_meta_bridge.clone(),
+                        )
+                        .await;
+                }
+
+                graph
+                    .insert_link(
                         0.0,
                         0.0,
                         0.0,
-                        download,
-                        src_meta_bridge.clone(),
+                        upload,
                         source.clone(),
-                    ).await;
-                }
-
-                graph.insert_link(
-                    0.0,
-                    0.0,
-                    0.0,
-                    upload,
-                    dst_meta_bridge.clone(),
-                    destination.clone(),
-                ).await;
+                        src_meta_bridge.clone(),
+                    )
+                    .await;
 
                 if bidirectional {
-                    graph.insert_link(
+                    graph
+                        .insert_link(
+                            0.0,
+                            0.0,
+                            0.0,
+                            download,
+                            src_meta_bridge.clone(),
+                            source.clone(),
+                        )
+                        .await;
+                }
+
+                graph
+                    .insert_link(
                         0.0,
                         0.0,
                         0.0,
-                        download,
-                        destination.clone(),
+                        upload,
                         dst_meta_bridge.clone(),
-                    ).await;
+                        destination.clone(),
+                    )
+                    .await;
+
+                if bidirectional {
+                    graph
+                        .insert_link(
+                            0.0,
+                            0.0,
+                            0.0,
+                            download,
+                            destination.clone(),
+                            dst_meta_bridge.clone(),
+                        )
+                        .await;
                 }
             } else if source_node_shared_link {
                 let meta_bridge = self.create_meta_bridge(graph);
 
-                graph.insert_link(
-                    latency,
-                    jitter,
-                    drop,
-                    upload,
-                    meta_bridge.clone(),
-                    destination.clone(),
-                ).await;
-
-                if bidirectional {
-                    graph.insert_link(
+                graph
+                    .insert_link(
                         latency,
                         jitter,
                         drop,
-                        download,
-                        destination.clone(),
+                        upload,
                         meta_bridge.clone(),
-                    ).await;
-                }
-
-                graph.insert_link(0.0, 0.0, 0.0, upload, source.clone(), meta_bridge.clone()).await;
+                        destination.clone(),
+                    )
+                    .await;
 
                 if bidirectional {
-                    graph.insert_link(0.0, 0.0, 0.0, download, meta_bridge.clone(), source.clone()).await;
+                    graph
+                        .insert_link(
+                            latency,
+                            jitter,
+                            drop,
+                            download,
+                            destination.clone(),
+                            meta_bridge.clone(),
+                        )
+                        .await;
+                }
+
+                graph
+                    .insert_link(0.0, 0.0, 0.0, upload, source.clone(), meta_bridge.clone())
+                    .await;
+
+                if bidirectional {
+                    graph
+                        .insert_link(0.0, 0.0, 0.0, download, meta_bridge.clone(), source.clone())
+                        .await;
                 }
             } else if destination_node_shared_link {
                 let meta_bridge = self.create_meta_bridge(graph);
-                graph.insert_link(
-                    latency,
-                    jitter,
-                    drop,
-                    upload,
-                    source.clone(),
-                    meta_bridge.clone(),
-                ).await;
-
-                if bidirectional {
-                    graph.insert_link(
+                graph
+                    .insert_link(
                         latency,
                         jitter,
                         drop,
-                        download,
-                        meta_bridge.clone(),
+                        upload,
                         source.clone(),
-                    ).await;
-                }
-
-                graph.insert_link(
-                    0.0,
-                    0.0,
-                    0.0,
-                    upload,
-                    meta_bridge.clone(),
-                    destination.clone(),
-                ).await;
+                        meta_bridge.clone(),
+                    )
+                    .await;
 
                 if bidirectional {
-                    graph.insert_link(
+                    graph
+                        .insert_link(
+                            latency,
+                            jitter,
+                            drop,
+                            download,
+                            meta_bridge.clone(),
+                            source.clone(),
+                        )
+                        .await;
+                }
+
+                graph
+                    .insert_link(
                         0.0,
                         0.0,
                         0.0,
-                        download,
-                        destination.clone(),
+                        upload,
                         meta_bridge.clone(),
-                    ).await;
+                        destination.clone(),
+                    )
+                    .await;
+
+                if bidirectional {
+                    graph
+                        .insert_link(
+                            0.0,
+                            0.0,
+                            0.0,
+                            download,
+                            destination.clone(),
+                            meta_bridge.clone(),
+                        )
+                        .await;
                 }
             } else {
-                graph.insert_link(
-                    latency,
-                    jitter,
-                    drop,
-                    upload,
-                    source.clone(),
-                    destination.clone(),
-                ).await;
-
-                if bidirectional {
-                    graph.insert_link(
+                graph
+                    .insert_link(
                         latency,
                         jitter,
                         drop,
-                        download,
-                        destination.clone(),
+                        upload,
                         source.clone(),
-                    ).await;
+                        destination.clone(),
+                    )
+                    .await;
+
+                if bidirectional {
+                    graph
+                        .insert_link(
+                            latency,
+                            jitter,
+                            drop,
+                            download,
+                            destination.clone(),
+                            source.clone(),
+                        )
+                        .await;
                 }
             }
         }
     }
 
-    pub fn create_meta_bridge(&mut self, graph: &mut Graph) -> String {
+    fn create_meta_bridge(&mut self, graph: &mut Graph) -> String {
         let random_name = generate(5, charsets::ALPHANUMERIC);
 
         graph.insert_bridge(random_name.clone(), None);
 
-        return random_name;
+        random_name
     }
 
-    pub fn parse_bandwidth(&self, bandwidth: String) -> f32 {
+    fn parse_bandwidth(&self, bandwidth: String) -> f32 {
         let bandwidth_regex = Regex::new(r"([0-9]+)([KMG])bps").unwrap();
 
         let multi = 1.00;
@@ -749,24 +760,23 @@ impl XMLGraphParser {
             // print and fail
             return 0.0;
         }
-        return 0.0;
+        0.0
     }
 
     pub async fn parse_schedule<'a>(
         &self,
-        scheduler: Arc<Mutex<EventScheduler>>,
+        initial_graph: Graph,
         tree: &Document<'a>,
-    ) {
+    ) -> (Vec<Graph>, Vec<Event>) {
+        let graph_root_handle = initial_graph
+            .graph_root
+            .clone()
+            .expect("graph root should have been set before calling parse_schedule");
+
+        let mut events: Vec<Event> = Vec::new();
+        let mut graphs = vec![initial_graph];
+
         let root = tree.root().first_child().unwrap();
-
-        let mut scheduler = scheduler.lock().await;
-        let state_handle = scheduler.state.clone();
-        let state = state_handle.lock().await;
-
-        let graph_handle = state.get_current_graph(); // temp binding
-        let graph = graph_handle.lock().await;
-        let graph_root_handle = graph.graph_root.clone().unwrap(); // temp binding
-        let graph_root = graph_root_handle.lock().await;
 
         let mut dynamic = None;
 
@@ -775,31 +785,27 @@ impl XMLGraphParser {
                 continue;
             }
             if node.tag_name().name() == "dynamic" {
-                if !dynamic.is_none() {
-                    print_and_fail("Only one <dynamic> block is allowed.".to_string());
+                if dynamic.is_some() {
+                    panic!("Only one <dynamic> block is allowed.");
                 }
                 dynamic = Some(node);
             }
         }
 
         if dynamic.is_none() {
-            scheduler.schedule_join(0.0);
-            return;
+            events.push(Event { id: 0, time: 0.0 });
+            return (graphs, events);
         }
 
         let mut first_join = -1.0;
-        let mut first_leave = INFINITY;
+        let mut first_leave = f32::INFINITY;
 
         let mut rng = Pcg64::seed_from_u64(12345);
 
-        let mut replicas = vec![];
+        let mut replicas = Vec::new();
 
-        for _i in 0..graph_root.replicas {
-            let mut element = vec![];
-
-            element.push(false);
-            element.push(false);
-            element.push(false);
+        for _ in 0..graph_root_handle.lock().await.replicas {
+            let element = vec![false, false, false];
 
             replicas.push(element);
         }
@@ -813,11 +819,11 @@ impl XMLGraphParser {
                 continue;
             }
 
-            if !(event.tag_name().name() == "schedule") {
-                print_and_fail(format!(
+            if event.tag_name().name() != "schedule" {
+                panic!(
                     "Only <schedule> is allowed inside <dynamic> {} ",
-                    event.tag_name().name().to_string()
-                ));
+                    event.tag_name().name()
+                );
             }
 
             let mut time = 0.0;
@@ -826,33 +832,47 @@ impl XMLGraphParser {
                 time = event.attribute("time").unwrap().parse().unwrap();
 
                 if time < 0.0 {
-                    print_and_fail("time attribute must be a positive number".to_string());
+                    panic!("Time attribute must be a positive number.");
                 }
             }
 
             if event.has_attribute("name") && event.has_attribute("action") {
                 let node_name = event.attribute("name").unwrap().to_string();
 
-                let mut bridge_names = vec![];
-                for (name, _bridges) in graph.bridges_by_name.iter() {
-                    bridge_names.push(name.clone());
-                }
+                let bridge_names: Vec<String> = graphs
+                    .last()
+                    .unwrap()
+                    .bridges_by_name
+                    .keys()
+                    .cloned()
+                    .collect();
 
                 if bridge_names.contains(&node_name) {
                     if event.attribute("action").unwrap() == "join" {
-                        scheduler
-                            .schedule_bridge_join(time, node_name.to_string())
-                            .await;
+                        let (new_graph, new_event) = eventscheduler::schedule_bridge_join(
+                            graphs.last().unwrap(),
+                            &self.shortest_path_type,
+                            time,
+                            &node_name,
+                        )
+                        .await;
+                        graphs.push(new_graph);
+                        events.push(new_event);
                     }
-
                     if event.attribute("action").unwrap() == "leave" {
-                        scheduler
-                            .schedule_bridge_leave(time, node_name.to_string())
-                            .await;
+                        let (new_graph, new_event) = eventscheduler::schedule_bridge_leave(
+                            graphs.last().unwrap(),
+                            &self.shortest_path_type,
+                            time,
+                            &node_name,
+                        )
+                        .await;
+                        graphs.push(new_graph);
+                        events.push(new_event);
                     }
                 }
 
-                if node_name != graph_root.hostname {
+                if node_name != graph_root_handle.lock().await.hostname {
                     continue;
                 }
 
@@ -871,11 +891,12 @@ impl XMLGraphParser {
                         let mut id: usize;
 
                         loop {
-                            id = rng.random_range(0..graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root_handle.lock().await.replicas)
+                                as usize;
 
                             available = !replicas[id][joined];
 
-                            if !graph_root.reuse {
+                            if !graph_root_handle.lock().await.reuse {
                                 available = available && !replicas[id][used];
                             }
                             if available {
@@ -886,13 +907,13 @@ impl XMLGraphParser {
                         // mark the state
                         replicas[id][joined] = true;
 
-                        if !graph_root.reuse {
+                        if !graph_root_handle.lock().await.reuse {
                             replicas[id][used] = true;
                         }
 
                         // if it is us
-                        if graph_root.replica_id == id {
-                            scheduler.schedule_join(time);
+                        if graph_root_handle.lock().await.replica_id == id {
+                            events.push(Event { id: 0, time });
                         }
 
                         if first_join < 0.0 {
@@ -908,7 +929,8 @@ impl XMLGraphParser {
                         let mut id: usize;
 
                         loop {
-                            id = rng.random_range(0..graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root_handle.lock().await.replicas)
+                                as usize;
 
                             up = replicas[id][joined];
 
@@ -919,14 +941,14 @@ impl XMLGraphParser {
 
                         replicas[id][joined] = false;
 
-                        if graph_root.replica_id == id {
+                        if graph_root_handle.lock().await.replica_id == id {
                             if event_type == "leave" {
-                                //Temporary fix before we change all wiki
-                                scheduler.schedule_crash(time);
+                                // temporary fix before we change all wiki
+                                events.push(Event { id: 3, time });
                             }
 
                             if event_type == "crash" {
-                                scheduler.schedule_crash(time);
+                                events.push(Event { id: 3, time });
                             }
                         }
 
@@ -943,7 +965,8 @@ impl XMLGraphParser {
                         let mut id;
 
                         loop {
-                            id = rng.random_range(0..graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root_handle.lock().await.replicas)
+                                as usize;
 
                             disconnected_bool = replicas[id][disconnected];
 
@@ -953,8 +976,8 @@ impl XMLGraphParser {
                         }
 
                         replicas[id][disconnected] = false;
-                        if graph_root.replica_id == id {
-                            scheduler.schedule_reconnect(time);
+                        if graph_root_handle.lock().await.replica_id == id {
+                            events.push(Event { id: 5, time });
                         }
                     }
                 }
@@ -966,7 +989,8 @@ impl XMLGraphParser {
                         let mut id;
 
                         loop {
-                            id = rng.random_range(0..graph_root.replicas) as usize;
+                            id = rng.random_range(0..graph_root_handle.lock().await.replicas)
+                                as usize;
 
                             connected = replicas[id][joined] && !(replicas[id][disconnected]);
 
@@ -977,8 +1001,8 @@ impl XMLGraphParser {
 
                         replicas[id][disconnected] = true;
 
-                        if graph_root.replica_id == id {
-                            scheduler.schedule_disconnect(time);
+                        if graph_root_handle.lock().await.replica_id == id {
+                            events.push(Event { id: 4, time });
                         }
                     }
                 }
@@ -995,18 +1019,33 @@ impl XMLGraphParser {
                     let event_type = event.attribute("action").unwrap().to_string();
 
                     if event_type == "leave" {
-                        scheduler
-                            .schedule_link_leave(time, origin, destination)
-                            .await;
+                        let (new_graph, event) = eventscheduler::schedule_link_leave(
+                            graphs.last().unwrap(),
+                            &self.shortest_path_type,
+                            time,
+                            origin,
+                            destination,
+                        )
+                        .await;
+                        graphs.push(new_graph);
+                        events.push(event);
                     }
 
                     if event_type == "join" {
                         let origin = event.attribute("origin").unwrap().to_string();
                         let destination = event.attribute("dest").unwrap().to_string();
 
-                        let link_existed = scheduler
-                            .schedule_link_join(time, origin.clone(), destination.clone())
+                        let (new_graph, new_event, link_existed) =
+                            eventscheduler::schedule_link_join(
+                                graphs.last().unwrap(),
+                                &self.shortest_path_type,
+                                time,
+                                &origin,
+                                &destination,
+                            )
                             .await;
+                        graphs.push(new_graph);
+                        events.push(new_event);
 
                         if link_existed {
                             continue;
@@ -1027,31 +1066,37 @@ impl XMLGraphParser {
                                 jitter = event.attribute("jitter").unwrap().parse().unwrap();
                             }
 
-                            scheduler
-                                .schedule_new_link(
+                            let (new_graph, new_event) = eventscheduler::schedule_new_link(
+                                graphs.last().unwrap(),
+                                &self.shortest_path_type,
+                                time,
+                                &origin,
+                                &destination,
+                                latency,
+                                jitter,
+                                drop,
+                                self.parse_bandwidth(bandwidth),
+                            )
+                            .await;
+                            graphs.push(new_graph);
+                            events.push(new_event);
+
+                            if event.has_attribute("download") {
+                                let bandwidth = event.attribute("download").unwrap().to_string();
+                                let (new_graph, new_event) = eventscheduler::schedule_new_link(
+                                    graphs.last().unwrap(),
+                                    &self.shortest_path_type,
                                     time,
-                                    origin.clone(),
-                                    destination.clone(),
+                                    &destination,
+                                    &origin,
                                     latency,
                                     jitter,
                                     drop,
                                     self.parse_bandwidth(bandwidth),
                                 )
                                 .await;
-
-                            if event.has_attribute("download") {
-                                let bandwidth = event.attribute("download").unwrap().to_string();
-                                scheduler
-                                    .schedule_new_link(
-                                        time,
-                                        destination.clone(),
-                                        origin.clone(),
-                                        latency,
-                                        jitter,
-                                        drop,
-                                        self.parse_bandwidth(bandwidth),
-                                    )
-                                    .await;
+                                graphs.push(new_graph);
+                                events.push(new_event);
                             }
                         }
                     }
@@ -1083,32 +1128,38 @@ impl XMLGraphParser {
                     if event.has_attribute("download") {
                         let download_bw =
                             self.parse_bandwidth(event.attribute("download").unwrap().to_string());
-                        scheduler
-                            .schedule_link_change(
-                                time,
-                                destination.clone(),
-                                origin.clone(),
-                                latency,
-                                jitter,
-                                drop,
-                                download_bw,
-                            )
-                            .await;
-                    }
-
-                    scheduler
-                        .schedule_link_change(
+                        let (new_graph, new_event) = eventscheduler::schedule_link_change(
+                            graphs.last().unwrap(),
+                            &self.shortest_path_type,
                             time,
-                            origin.clone(),
-                            destination.clone(),
+                            &destination,
+                            &origin,
                             latency,
                             jitter,
                             drop,
-                            bandwidth,
+                            download_bw,
                         )
                         .await;
+                        graphs.push(new_graph);
+                        events.push(new_event);
+                    }
+                    let (new_graph, new_event) = eventscheduler::schedule_link_change(
+                        graphs.last().unwrap(),
+                        &self.shortest_path_type,
+                        time,
+                        &origin,
+                        &destination,
+                        latency,
+                        jitter,
+                        drop,
+                        bandwidth,
+                    )
+                    .await;
+                    graphs.push(new_graph);
+                    events.push(new_event);
                 }
             }
         }
+        (graphs, events)
     }
 }

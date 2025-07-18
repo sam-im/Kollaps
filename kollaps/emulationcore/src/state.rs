@@ -226,16 +226,6 @@ impl State {
         }
     }
 
-    pub fn insert_initial_graph(&mut self, graph: Graph) {
-        let graph = Arc::new(Mutex::new(graph));
-        if self.graphs.is_empty() && self.graph_counter.eq(&0) {
-            self.graphs.push(graph);
-            self.graph_counter += 1;
-        } else {
-            panic!("do not use this function to insert any other graph than the initial graph")
-        }
-    }
-
     //Creates and inserts an empty graph in the vector
     pub async fn insert_graph(&mut self) {
         let graph = Arc::new(Mutex::new(Graph::new()));
@@ -243,7 +233,7 @@ impl State {
             graph
                 .lock()
                 .await
-                .create_from_graph(self.get_graph_most_recent().clone())
+                .create_from_graph(&self.get_graph_most_recent().lock().await.clone())
                 .await;
         }
         self.graphs.push(graph);

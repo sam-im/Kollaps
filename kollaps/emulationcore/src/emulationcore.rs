@@ -99,22 +99,32 @@ impl EmulationCore {
 
     pub async fn init_baremetal(&mut self) {
         info!("EC {}: started boostrapping EC", self.name);
+        self.state.lock().await.name = self.name.clone();
 
         let text = std::fs::read_to_string(self.topology_file.clone()).unwrap();
         let doc = Document::parse(&text).unwrap();
-
         let mut parser = XMLGraphParser::new("baremetal".to_string());
-        let graph = parser.fill_graph(&doc).await;
 
-        // Collect parsed graph and config properties
-        self.state.lock().await.insert_initial_graph(graph);
-        self.state.lock().await.name = self.name.clone();
+        let mut initial_graph = parser.fill_graph(&doc).await;
 
         self.shortest_path_type = parser.shortest_path_type.to_string();
-
         self.pool_period = parser.pool_period;
-
         self.max_age = parser.max_age;
+
+        initial_graph
+            .set_graph_root_baremetal(self.networkdevice.clone())
+            .await;
+        self.calculate_paths(&mut initial_graph).await;
+
+        let (graphs, events) = parser.parse_schedule(initial_graph, &doc).await;
+
+        // Collect parsed graphs and events
+        self.state.lock().await.graphs = graphs
+            .iter()
+            .map(|g| Arc::new(Mutex::new(g.clone())))
+            .collect();
+        self.state.lock().await.graph_counter = graphs.len();
+        self.scheduler.lock().await.events = events;
 
         let service_count = self
             .state
@@ -136,23 +146,7 @@ impl EmulationCore {
         //Start the CM process
         let process = self.start_cm(service_count).await;
 
-        //Graph related operation
-        self.state
-            .lock()
-            .await
-            .get_current_graph()
-            .lock()
-            .await
-            .set_graph_root_baremetal(self.networkdevice.clone())
-            .await;
-
-        self.calculate_paths().await;
-
-        //Parse dynamic events
-
         self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
-
-        parser.parse_schedule(self.scheduler.clone(), &doc).await;
         self.scheduler.lock().await.sort_events();
         self.scheduler.lock().await.pid = self.pid;
 
@@ -223,50 +217,41 @@ impl EmulationCore {
         let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
         let doc = Document::parse(&text).unwrap();
         let mut parser = XMLGraphParser::new("container".to_string());
-        let graph = parser.fill_graph(&doc).await;
 
-        // Collect parsed graph and properties
-        self.state.lock().await.insert_initial_graph(graph);
-        self.shortest_path_type = parser.shortest_path_type.to_string();
+        let mut initial_graph = parser.fill_graph(&doc).await;
+
+        self.shortest_path_type = parser.shortest_path_type.clone();
         self.pool_period = parser.pool_period;
         self.max_age = parser.max_age;
 
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
         //Get ips of all containers
         info!("EC {} - retrieving container IPs", self.name);
+        tokio::time::sleep(Duration::from_secs(2)).await;
         if self.orchestrator == "docker" {
-            self.state
-                .lock()
-                .await
-                .get_current_graph()
-                .lock()
-                .await
-                .resolve_hostnames_docker()
-                .await
+            initial_graph.resolve_hostnames_docker().await;
         } else {
-            let graph = self.state.lock().await.get_current_graph().clone();
-            let _ = resolve_hostnames_kubernetes(graph).await;
+            let _ = resolve_hostnames_kubernetes(&mut initial_graph).await;
         }
         info!("EC {}: retrieved container IPs", self.name);
 
-        self.state
-            .lock()
-            .await
-            .get_current_graph()
-            .lock()
-            .await
-            .set_graph_root()
-            .await;
-        self.calculate_paths().await;
+        initial_graph.set_graph_root().await;
+        self.calculate_paths(&mut initial_graph).await;
+
+        let (graphs, events) = parser.parse_schedule(initial_graph, &doc).await;
+
+        // Collect parsed graph and properties
+        self.state.lock().await.graphs = graphs
+            .iter()
+            .map(|g| Arc::new(Mutex::new(g.clone())))
+            .collect();
+        self.state.lock().await.graph_counter = graphs.len();
+        self.scheduler.lock().await.events = events;
 
         //Set name for debug
         self.scheduler.lock().await.name = self.name.clone();
-        self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
+        self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone(); // TODO remove, scheduler doesn't require this anymore
 
-        //Parse dynamic events
-        parser.parse_schedule(self.scheduler.clone(), &doc).await;
-        self.scheduler.lock().await.sort_events();
+        self.scheduler.lock().await.sort_events(); // TODO move these to scheduler start loop
         self.state.lock().await.shrink_maps().await;
         self.scheduler.lock().await.pid = self.pid;
 
@@ -386,19 +371,16 @@ impl EmulationCore {
         return process;
     }
 
-    pub async fn calculate_paths(&mut self) {
-        let mut _current_graph = self.state.lock().await.get_current_graph();
-        let mut current_graph = _current_graph.lock().await;
-
+    async fn calculate_paths(&mut self, graph: &mut Graph) {
         if self.shortest_path_type.eq("hop") {
-            current_graph.calculate_shortest_paths().await;
+            graph.calculate_shortest_paths().await;
         }
         if self.shortest_path_type.eq("latency") {
-            current_graph.calculate_shortest_paths_latency().await;
+            graph.calculate_shortest_paths_latency().await;
         }
 
-        current_graph.calculate_properties().await;
-        self.name = current_graph.get_name().await;
+        graph.calculate_properties().await;
+        self.name = graph.get_name().await;
         self.state.lock().await.name = self.name.clone();
     }
 
@@ -585,8 +567,8 @@ async fn start_events(es_handle: Arc<Mutex<EventScheduler>>) {
     es_handle.lock().await.start().await;
 }
 
-pub async fn resolve_hostnames_kubernetes(graph: Arc<Mutex<Graph>>) -> Result<()> {
-    let mut services_by_name = graph.lock().await.services_by_name.clone();
+async fn resolve_hostnames_kubernetes(graph: &mut Graph) -> Result<()> {
+    let mut services_by_name = graph.services_by_name.clone();
     for (name, services) in services_by_name.iter_mut() {
         let mut ips: Vec<Ipv4Addr>;
         loop {
@@ -629,11 +611,7 @@ pub async fn resolve_hostnames_kubernetes(graph: Arc<Mutex<Graph>>) -> Result<()
             let int_ip = convert_to_int(ips[i].octets());
             service.lock().await.ip = int_ip;
             service.lock().await.replica_id = i;
-            graph
-                .lock()
-                .await
-                .services
-                .insert(int_ip, Arc::clone(service));
+            graph.services.insert(int_ip, Arc::clone(service));
         }
     }
 

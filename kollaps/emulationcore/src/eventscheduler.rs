@@ -16,6 +16,7 @@
 use crate::aux::start_script;
 use crate::docker::start_experiment;
 use crate::docker::stop_experiment;
+use crate::graph::Graph;
 use crate::state::State;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +27,7 @@ use tracing::info;
 pub struct EventScheduler {
     pub events: Vec<Event>,
     pub state: Arc<Mutex<State>>,
-    pub timebetweenevents: Vec<f32>,
+    pub timebetweenevents: Vec<f32>, // TODO remove
     pub pid: u32,
     orchestrator: String,
     pub script: String,
@@ -75,284 +76,6 @@ impl EventScheduler {
         let event = Event::new(5, time);
 
         self.events.push(event);
-    }
-
-    pub async fn schedule_bridge_join(&mut self, time: f32, bridge_name: String) {
-        {
-            let state_handle = self.state.clone();
-            let mut state = state_handle.lock().await;
-
-            state.insert_graph().await;
-
-            let most_recent_graph_handle = state.get_graph_most_recent();
-            let mut most_recent_graph = most_recent_graph_handle.lock().await;
-
-            let bridge = most_recent_graph
-                .removed_bridges
-                .remove(&bridge_name)
-                .unwrap();
-            most_recent_graph
-                .bridges_by_name
-                .insert(bridge_name.clone(), bridge);
-        }
-
-        self.recompute_and_store().await;
-
-        let event = Event::new(1, time);
-
-        self.events.push(event);
-    }
-
-    pub async fn schedule_bridge_leave(&mut self, time: f32, bridge_name: String) {
-        {
-            let state_handle = self.state.clone();
-            let mut state = state_handle.lock().await;
-
-            state.insert_graph().await;
-
-            let most_recent_graph_handle = state.get_graph_most_recent();
-            let mut most_recent_graph = most_recent_graph_handle.lock().await;
-
-            let bridges = most_recent_graph
-                .bridges_by_name
-                .remove(&bridge_name)
-                .unwrap();
-            most_recent_graph
-                .removed_bridges
-                .insert(bridge_name.clone(), bridges);
-        }
-
-        self.recompute_and_store().await;
-
-        let event = Event::new(1, time);
-
-        self.events.push(event);
-    }
-
-    pub async fn schedule_link_leave(&mut self, time: f32, origin: String, destination: String) {
-        {
-            let state_handle = self.state.clone();
-            let mut state = state_handle.lock().await;
-
-            state.insert_graph().await;
-
-            let most_recent_graph_handle = state.get_graph_most_recent();
-            let mut most_recent_graph = most_recent_graph_handle.lock().await;
-
-            let links = most_recent_graph.links.clone();
-
-            //get id of links with origin and destination
-            let mut ids = vec![];
-            for (id, link_handle) in links.iter() {
-                let link = link_handle.lock().await;
-
-                let source = link.source.lock().await.hostname.clone();
-                let dest = link.destination.lock().await.hostname.clone();
-
-                if source == origin && dest == destination {
-                    ids.push(id);
-                    most_recent_graph.removed_links.push(link_handle.clone());
-                }
-            }
-
-            //remove them from the services and bridges
-            for id in ids {
-                most_recent_graph.links.remove(id);
-
-                let services = most_recent_graph.services.clone();
-
-                for (_ip, service) in services.iter() {
-                    service.lock().await.remove_link(*id);
-                }
-
-                let bridges = most_recent_graph.bridges.clone();
-
-                for (_ip, bridge) in bridges.iter() {
-                    bridge.lock().await.remove_link(*id);
-                }
-            }
-        }
-
-        let event = Event::new(1, time);
-
-        self.events.push(event);
-
-        self.recompute_and_store().await;
-    }
-
-    pub async fn schedule_link_join(
-        &mut self,
-        time: f32,
-        origin: String,
-        destination: String,
-    ) -> bool {
-        self.state.lock().await.insert_graph().await;
-
-        let mut joining_links = vec![];
-
-        let removed_links = self
-            .state
-            .lock()
-            .await
-            .get_graph_most_recent()
-            .lock()
-            .await
-            .removed_links
-            .clone();
-
-        let mut link_existed = false;
-
-        //remove from removed_links and get joining links
-        for (i, link) in removed_links.iter().enumerate() {
-            let source = link.lock().await.source.lock().await.hostname.clone();
-
-            let dest = link.lock().await.destination.lock().await.hostname.clone();
-
-            if source == origin && dest == destination {
-                joining_links.push(link.clone());
-                self.state
-                    .lock()
-                    .await
-                    .get_graph_most_recent()
-                    .lock()
-                    .await
-                    .removed_links
-                    .remove(i);
-                self.state
-                    .lock()
-                    .await
-                    .get_graph_most_recent()
-                    .lock()
-                    .await
-                    .links
-                    .insert(link.lock().await.id, link.clone());
-            }
-        }
-
-        //add them to services and bridges
-        for link in joining_links {
-            link_existed = true;
-
-            let services = self
-                .state
-                .lock()
-                .await
-                .get_graph_most_recent()
-                .lock()
-                .await
-                .services_by_name
-                .clone();
-            let source = link.lock().await.source.lock().await.hostname.clone();
-            for (name, services) in services.iter() {
-                if source == *name {
-                    for service in services {
-                        service.lock().await.attach_link(link.lock().await.id);
-                    }
-                }
-            }
-            let bridges = self
-                .state
-                .lock()
-                .await
-                .get_graph_most_recent()
-                .lock()
-                .await
-                .bridges_by_name
-                .clone();
-
-            for (name, bridges) in bridges.iter() {
-                if source == *name {
-                    for bridge in bridges {
-                        bridge.lock().await.attach_link(link.lock().await.id);
-                    }
-                }
-            }
-        }
-
-        let event = Event::new(1, time);
-
-        self.events.push(event);
-
-        self.recompute_and_store().await;
-
-        return link_existed;
-    }
-
-    pub async fn schedule_new_link(
-        &mut self,
-        time: f32,
-        origin: String,
-        destination: String,
-        latency: f32,
-        jitter: f32,
-        drop: f32,
-        bandwidth: f32,
-    ) {
-        self.state.lock().await.insert_graph().await;
-
-        self.state
-            .lock()
-            .await
-            .get_graph_most_recent()
-            .lock()
-            .await
-            .insert_link(latency, jitter, drop, bandwidth, origin, destination).await;
-
-        let event = Event::new(1, time);
-
-        self.events.push(event);
-
-        self.recompute_and_store().await;
-    }
-
-    pub async fn schedule_link_change(
-        &mut self,
-        time: f32,
-        origin: String,
-        destination: String,
-        latency: f32,
-        jitter: f32,
-        drop: f32,
-        bandwidth: f32,
-    ) {
-        self.state.lock().await.insert_graph().await;
-
-        for (_id, link) in self
-            .state
-            .lock()
-            .await
-            .get_graph_most_recent()
-            .lock()
-            .await
-            .links
-            .iter_mut()
-        {
-            let link_origin = link.lock().await.source.lock().await.hostname.clone();
-            let link_dest = link.lock().await.destination.lock().await.hostname.clone();
-
-            if origin == link_origin && link_dest == destination {
-                if bandwidth >= 0.0 {
-                    link.lock().await.bandwidth = bandwidth;
-                }
-                if latency >= 0.0 {
-                    link.lock().await.latency = latency;
-                }
-                if jitter >= 0.0 {
-                    link.lock().await.jitter = jitter;
-                }
-                if drop >= 0.0 {
-                    link.lock().await.drop = drop;
-                }
-
-                //print_message(self.name.clone(),format!("origin is {} and dest is {} and new latency is {}",origin,destination,latency).to_string());
-            }
-        }
-
-        let event = Event::new(1, time);
-
-        self.events.push(event);
-
-        self.recompute_and_store().await;
     }
 
     pub async fn recompute_and_store(&mut self) {
@@ -420,7 +143,7 @@ impl EventScheduler {
                         }
                     } else {
                         tokio::spawn(async move { start_experiment(id).await });
-                        info!("EC {}: started my script", self.name);
+                        info!("EC {}: started experiment", self.name);
                     }
                     //task::spawn(start_experiment(self.state.lock().unwrap().id.clone()));
                 }
@@ -452,6 +175,212 @@ impl EventScheduler {
             tokio::time::sleep(Duration::from_secs_f32(0.5)).await;
         }
     }
+}
+
+pub async fn schedule_link_leave(
+    graph: &Graph,
+    shortest_path_type: &str,
+    time: f32,
+    origin: String,
+    destination: String,
+) -> (Graph, Event) {
+    let mut new_graph = Graph::new();
+    new_graph.create_from_graph(graph).await;
+
+    let mut ids = vec![];
+    let links = new_graph.links.clone();
+    for (id, link_handle) in links {
+        let link = link_handle.lock().await;
+
+        let src = link.source.lock().await.hostname.clone();
+        let dst = link.destination.lock().await.hostname.clone();
+
+        if src == origin && dst == destination {
+            ids.push(id);
+            new_graph.removed_links.push(link_handle.clone());
+        }
+    }
+
+    for id in ids {
+        new_graph.links.remove(&id);
+
+        for (_, service) in new_graph.services.iter() {
+            service.lock().await.remove_link(id);
+        }
+
+        for (_, bridge) in new_graph.bridges.iter() {
+            bridge.lock().await.remove_link(id);
+        }
+    }
+    new_graph.recompute_properties(shortest_path_type).await;
+    let event = Event::new(1, time);
+
+    (new_graph, event)
+}
+
+pub async fn schedule_link_join(
+    graph: &Graph,
+    shortest_path_type: &str,
+    time: f32,
+    origin: &str,
+    destination: &str,
+) -> (Graph, Event, bool) {
+    let mut new_graph = Graph::new();
+    new_graph.create_from_graph(graph).await;
+
+    let mut joining_links = vec![];
+    let mut link_existed = false;
+    let removed_links = new_graph.removed_links.clone();
+
+    // remove from removed_links and get joining links
+    for (i, link) in removed_links.iter().enumerate() {
+        let src = link.lock().await.source.lock().await.hostname.clone();
+        let dst = link.lock().await.destination.lock().await.hostname.clone();
+
+        if src == origin && dst == destination {
+            joining_links.push(link.clone());
+            new_graph.removed_links.remove(i);
+            new_graph.links.insert(link.lock().await.id, link.clone());
+        }
+    }
+
+    // add them to services and bridges
+    for link in joining_links {
+        link_existed = true;
+
+        let source = link.lock().await.source.lock().await.hostname.clone();
+
+        let services = new_graph.services_by_name.clone();
+        for (name, services) in services.iter() {
+            if source == *name {
+                for service in services {
+                    service.lock().await.attach_link(link.lock().await.id);
+                }
+            }
+        }
+
+        let bridges = new_graph.bridges_by_name.clone();
+        for (name, bridges) in bridges.iter() {
+            if source == *name {
+                for bridge in bridges {
+                    bridge.lock().await.attach_link(link.lock().await.id);
+                }
+            }
+        }
+    }
+    new_graph.recompute_properties(shortest_path_type).await;
+    let event = Event::new(1, time);
+
+    (new_graph, event, link_existed)
+}
+
+pub async fn schedule_new_link(
+    graph: &Graph,
+    shortest_path_type: &str,
+    time: f32,
+    origin: &str,
+    destination: &str,
+    latency: f32,
+    jitter: f32,
+    drop: f32,
+    bandwidth: f32,
+) -> (Graph, Event) {
+    let mut new_graph = Graph::new();
+    new_graph.create_from_graph(graph).await;
+
+    new_graph
+        .insert_link(
+            latency,
+            jitter,
+            drop,
+            bandwidth,
+            origin.to_string(),
+            destination.to_string(),
+        )
+        .await;
+    new_graph.recompute_properties(shortest_path_type).await;
+    let event = Event::new(1, time);
+
+    (new_graph, event)
+}
+
+pub async fn schedule_link_change(
+    graph: &Graph,
+    shortest_path_type: &str,
+    time: f32,
+    origin: &str,
+    destination: &str,
+    latency: f32,
+    jitter: f32,
+    drop: f32,
+    bandwidth: f32,
+) -> (Graph, Event) {
+    let mut new_graph = Graph::new();
+    new_graph.create_from_graph(graph).await;
+
+    for (_, link) in new_graph.links.iter_mut() {
+        let link_origin = link.lock().await.source.lock().await.hostname.clone();
+        let link_dest = link.lock().await.destination.lock().await.hostname.clone();
+
+        if origin == link_origin && link_dest == destination {
+            if bandwidth >= 0.0 {
+                link.lock().await.bandwidth = bandwidth;
+            }
+            if latency >= 0.0 {
+                link.lock().await.latency = latency;
+            }
+            if jitter >= 0.0 {
+                link.lock().await.jitter = jitter;
+            }
+            if drop >= 0.0 {
+                link.lock().await.drop = drop;
+            }
+        }
+    }
+    new_graph.recompute_properties(shortest_path_type).await;
+    let event = Event::new(1, time);
+
+    (new_graph, event)
+}
+
+pub async fn schedule_bridge_join(
+    graph: &Graph,
+    shortest_path_type: &str,
+    time: f32,
+    bridge_name: &str,
+) -> (Graph, Event) {
+    let mut new_graph = Graph::new();
+    new_graph.create_from_graph(graph).await;
+
+    let bridge = new_graph.removed_bridges.remove(bridge_name).unwrap();
+    new_graph
+        .bridges_by_name
+        .insert(bridge_name.to_string(), bridge);
+
+    new_graph.recompute_properties(shortest_path_type).await;
+    let event = Event::new(1, time);
+
+    (new_graph, event)
+}
+
+pub async fn schedule_bridge_leave(
+    graph: &Graph,
+    shortest_path_type: &str,
+    time: f32,
+    bridge_name: &str,
+) -> (Graph, Event) {
+    let mut new_graph = Graph::new();
+    new_graph.create_from_graph(graph).await;
+
+    let bridge = new_graph.bridges_by_name.remove(bridge_name).unwrap();
+    new_graph
+        .removed_bridges
+        .insert(bridge_name.to_string(), bridge);
+
+    new_graph.recompute_properties(shortest_path_type).await;
+    let event = Event::new(1, time);
+
+    (new_graph, event)
 }
 
 // TODO use an enum, e.g. EventType, instead of event ids

@@ -24,6 +24,7 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info};
 
 //Graph of the current network state
+#[derive(Clone)]
 pub struct Graph {
     //Containers
     pub services: HashMap<u32, Arc<Mutex<Service>>>,
@@ -322,9 +323,9 @@ impl Graph {
         }
     }
 
-    //creates a graph from an older graph
-    pub async fn create_from_graph(&mut self, old_graph: Arc<Mutex<Graph>>) {
-        for (ip, service) in old_graph.lock().await.services.iter() {
+    // creates a graph from an older graph
+    pub async fn create_from_graph(&mut self, old_graph: &Graph) {
+        for (ip, service) in old_graph.services.iter() {
             let hostname = service.lock().await.hostname.clone();
 
             match self.services_by_name.get_mut(&hostname) {
@@ -339,7 +340,7 @@ impl Graph {
             self.services.insert(*ip, service.clone());
         }
 
-        for (ip, bridge) in old_graph.lock().await.bridges.iter() {
+        for (ip, bridge) in old_graph.bridges.iter() {
             let hostname = bridge.lock().await.hostname.clone();
 
             match self.bridges_by_name.get_mut(&hostname.to_string()) {
@@ -355,29 +356,21 @@ impl Graph {
             self.bridges.insert(*ip, bridge.clone());
         }
 
-        self.removed_links = old_graph.lock().await.removed_links.clone();
+        self.removed_links = old_graph.removed_links.clone();
+        self.removed_bridges = old_graph.removed_bridges.clone();
 
-        self.removed_bridges = old_graph.lock().await.removed_bridges.clone();
-
-        for (_id, link) in old_graph.lock().await.links.iter() {
+        for (_id, link) in old_graph.links.iter() {
             let link = link.lock().await;
+
             let id = link.id;
-
             let latency = link.latency;
-
             let jitter = link.jitter;
-
             let drop = link.drop;
-
             let bandwidth = link.bandwidth;
-
             let source = link.source.clone();
-
             let destination = link.destination.clone();
-
             let link = Link::new(id, latency, jitter, drop, bandwidth, source, destination);
             let link = Arc::new(Mutex::new(link));
-
             self.links.insert(id, link);
         }
 
@@ -385,28 +378,19 @@ impl Graph {
             let link = link.lock().await;
 
             let id = link.id;
-
             let latency = link.latency;
-
             let jitter = link.jitter;
-
             let drop = link.drop;
-
             let bandwidth = link.bandwidth;
-
             let source = link.source.clone();
-
             let destination = link.destination.clone();
-
             let link = Link::new(id, latency, jitter, drop, bandwidth, source, destination);
             let link = Arc::new(Mutex::new(link));
-
             self.links.insert(id, link);
         }
 
-        self.link_counter = old_graph.lock().await.link_counter.clone();
-
-        self.graph_root = old_graph.lock().await.graph_root.clone();
+        self.link_counter = old_graph.link_counter.clone();
+        self.graph_root = old_graph.graph_root.clone();
     }
 
     pub async fn calculate_properties(&mut self) {
@@ -602,7 +586,7 @@ impl Graph {
                     self.graph_root = Some(Arc::clone(root));
                     break;
                 }
-                None => debug!("EC - {} couldn't find service for IP {}", self.name, ip),
+                None => error!("EC - {} couldn't find service for IP {}", self.name, ip),
             }
         }
     }
@@ -614,7 +598,7 @@ impl Graph {
             let root = self.services.get_mut(&ip);
 
             if root.is_none() {
-                println!("Didnt find service for IP {} ", ip);
+                error!("Didnt find service for IP {} ", ip);
             } else {
                 let root = root.unwrap();
                 self.graph_root = Some(Arc::clone(root));
@@ -883,5 +867,14 @@ impl Graph {
             p.start = source_name;
             p.finish = destination_name;
         }
+    }
+
+    pub async fn recompute_properties(&mut self, shortest_path_type: &str) {
+        match shortest_path_type {
+            "hop" => self.calculate_shortest_paths().await,
+            "latency" => self.calculate_shortest_paths_latency().await,
+            _ => error!("shortest path type must be either 'hop' or 'latency'"),
+        }
+        self.calculate_properties().await;
     }
 }
