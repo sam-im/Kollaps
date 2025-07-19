@@ -146,7 +146,6 @@ impl EmulationCore {
         //Start the CM process
         let process = self.start_cm(service_count).await;
 
-        self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone();
         self.scheduler.lock().await.sort_events();
         self.scheduler.lock().await.pid = self.pid;
 
@@ -249,7 +248,6 @@ impl EmulationCore {
 
         //Set name for debug
         self.scheduler.lock().await.name = self.name.clone();
-        self.scheduler.lock().await.shortest_path_type = self.shortest_path_type.clone(); // TODO remove, scheduler doesn't require this anymore
 
         self.scheduler.lock().await.sort_events(); // TODO move these to scheduler start loop
         self.state.lock().await.shrink_maps().await;

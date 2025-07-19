@@ -15,8 +15,7 @@
 
 use crate::aux::convert_to_int;
 use crate::aux::print_and_fail;
-use crate::eventscheduler;
-use crate::eventscheduler::Event;
+use crate::eventscheduler::{self, Event, EventKind};
 use crate::graph::Graph;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
@@ -793,7 +792,7 @@ impl XMLGraphParser {
         }
 
         if dynamic.is_none() {
-            events.push(Event { id: 0, time: 0.0 });
+            events.push(Event::new(EventKind::Join, 0.0));
             return (graphs, events);
         }
 
@@ -913,7 +912,7 @@ impl XMLGraphParser {
 
                         // if it is us
                         if graph_root_handle.lock().await.replica_id == id {
-                            events.push(Event { id: 0, time });
+                            events.push(Event::new(EventKind::Join, time));
                         }
 
                         if first_join < 0.0 {
@@ -944,11 +943,11 @@ impl XMLGraphParser {
                         if graph_root_handle.lock().await.replica_id == id {
                             if event_type == "leave" {
                                 // temporary fix before we change all wiki
-                                events.push(Event { id: 3, time });
+                                events.push(Event::new(EventKind::Crash, time));
                             }
 
                             if event_type == "crash" {
-                                events.push(Event { id: 3, time });
+                                events.push(Event::new(EventKind::Crash, time));
                             }
                         }
 
@@ -977,7 +976,7 @@ impl XMLGraphParser {
 
                         replicas[id][disconnected] = false;
                         if graph_root_handle.lock().await.replica_id == id {
-                            events.push(Event { id: 5, time });
+                            events.push(Event::new(EventKind::Reconnect, time));
                         }
                     }
                 }
@@ -1002,7 +1001,7 @@ impl XMLGraphParser {
                         replicas[id][disconnected] = true;
 
                         if graph_root_handle.lock().await.replica_id == id {
-                            events.push(Event { id: 4, time });
+                            events.push(Event::new(EventKind::Disconnect, time));
                         }
                     }
                 }

@@ -12,27 +12,50 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use crate::aux::start_script;
-use crate::docker::start_experiment;
-use crate::docker::stop_experiment;
+use crate::docker::{start_experiment, stop_experiment};
 use crate::graph::Graph;
 use crate::state::State;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 use tokio::sync::Mutex;
-use tracing::info;
+use tokio::time::{Duration, Instant, sleep_until};
+use tracing::{error, info};
+
+/// Represents a dynamic event as parsed from a topology file.
+pub struct Event {
+    kind: EventKind,
+    time: f32,
+}
+
+impl Event {
+    /// Creates a new `Event`.
+    ///
+    /// The `time` parameter specifies how many seconds after the start of
+    /// the experiment this event will be triggered by the `EventScheduler`.
+    pub fn new(kind: EventKind, time: f32) -> Self {
+        Self { kind, time }
+    }
+}
+
+/// Describes the action that will be taken by the `EventScheduler` at some
+/// point in the experiment.
+pub enum EventKind {
+    /// Increment the age of `State`, i.e. switch to the next pre-computed Graph.
+    NextGraph,
+    Join,
+    Leave,
+    Crash,
+    Disconnect,
+    Reconnect,
+}
 
 pub struct EventScheduler {
     pub events: Vec<Event>,
     pub state: Arc<Mutex<State>>,
-    pub timebetweenevents: Vec<f32>, // TODO remove
     pub pid: u32,
     orchestrator: String,
     pub script: String,
     pub name: String,
-    pub shortest_path_type: String,
 }
 
 impl EventScheduler {
@@ -41,80 +64,11 @@ impl EventScheduler {
             events: vec![],
             name: "".to_string(),
             state: state,
-            timebetweenevents: vec![],
             pid: 0,
             orchestrator,
-            script: "".to_string(),
-            shortest_path_type: "hop".to_string(),
+            script: String::new(),
         }
     }
-
-    pub fn schedule_join(&mut self, time: f32) {
-        let event = Event::new(0, time);
-
-        self.events.push(event);
-    }
-
-    pub fn schedule_leave(&mut self, time: f32) {
-        let event = Event::new(2, time);
-        self.events.push(event);
-    }
-
-    pub fn schedule_crash(&mut self, time: f32) {
-        let event = Event::new(3, time);
-
-        self.events.push(event);
-    }
-
-    pub fn schedule_disconnect(&mut self, time: f32) {
-        let event = Event::new(4, time);
-
-        self.events.push(event);
-    }
-
-    pub fn schedule_reconnect(&mut self, time: f32) {
-        let event = Event::new(5, time);
-
-        self.events.push(event);
-    }
-
-    pub async fn recompute_and_store(&mut self) {
-        if self.shortest_path_type.eq("hop") {
-            self.state
-                .lock()
-                .await
-                .get_graph_most_recent()
-                .lock()
-                .await
-                .calculate_shortest_paths()
-                .await;
-        }
-        if self.shortest_path_type.eq("latency") {
-            self.state
-                .lock()
-                .await
-                .get_graph_most_recent()
-                .lock()
-                .await
-                .calculate_shortest_paths_latency()
-                .await;
-        }
-
-        self.state
-            .lock()
-            .await
-            .get_graph_most_recent()
-            .lock()
-            .await
-            .calculate_properties()
-            .await;
-    }
-
-    // pub fn print_events(&mut self){
-    //     for event in self.events.iter(){
-    //         println!("id {} and time {}", event.id,event.time);
-    //     }
-    // }
 
     pub fn sort_events(&mut self) {
         self.events
@@ -122,58 +76,58 @@ impl EventScheduler {
     }
 
     pub async fn start(&mut self) {
-        info!("EC {}: started experiment", self.name);
-        let now = Instant::now();
-        let mut count = 0;
+        info!("EC {}: event scheduler started", self.name);
+        self.sort_events();
+
+        let start_time = Instant::now();
+        let mut current_event_index = 0;
 
         loop {
-            // TODO use tokio's sleep_until
-            if now.elapsed().as_millis() >= (self.events[count].time * 1000.0) as u128 {
-                if self.events[count].id == 0 {
+            if self.events.len() <= current_event_index {
+                break;
+            }
+            let event_time = Duration::from_secs_f32(self.events[current_event_index].time);
+            sleep_until(start_time + event_time).await;
+
+            match self.events[current_event_index].kind {
+                EventKind::NextGraph => {
+                    self.state.lock().await.increment_age().await;
+                }
+                EventKind::Join => {
                     let id = self.state.lock().await.id.clone();
 
                     if self.orchestrator == "baremetal" {
-                        if self.script != "" {
+                        if !self.script.is_empty() {
                             info!(
-                                "EC {}: started script with name {}",
+                                "EC {}: started experiment with script {}",
                                 self.name,
                                 self.script.clone()
                             );
                             start_script(self.script.clone());
+                        } else {
+                            error!("EC {}: script is empty", self.name);
                         }
                     } else {
                         tokio::spawn(async move { start_experiment(id).await });
                         info!("EC {}: started experiment", self.name);
                     }
-                    //task::spawn(start_experiment(self.state.lock().unwrap().id.clone()));
                 }
-
-                if self.events[count].id == 3 {
-                    stop_experiment(self.pid.clone(), 3);
-                }
-                if self.events[count].id == 2 {
+                EventKind::Leave => {
                     stop_experiment(self.pid, 2);
                 }
-                if self.events[count].id == 1 {
-                    self.state.lock().await.increment_age().await;
+                EventKind::Crash => {
+                    stop_experiment(self.pid, 3);
                 }
-
-                if self.events[count].id == 4 {
+                EventKind::Disconnect => {
                     self.state.lock().await.tcal_client.disconnect().await;
                 }
-
-                if self.events[count].id == 5 {
+                EventKind::Reconnect => {
                     self.state.lock().await.tcal_client.reconnect().await;
                 }
-                if count == self.events.len() - 1 {
-                    info!("EC {}: all events concluded", self.name);
-                    break;
-                }
-                count = count + 1;
             }
-            // TODO also remove this if you use sleep_until above
-            tokio::time::sleep(Duration::from_secs_f32(0.5)).await;
+            current_event_index += 1;
         }
+        info!("EC {}: all events are concluded", self.name);
     }
 }
 
@@ -213,7 +167,7 @@ pub async fn schedule_link_leave(
         }
     }
     new_graph.recompute_properties(shortest_path_type).await;
-    let event = Event::new(1, time);
+    let event = Event::new(EventKind::NextGraph, time);
 
     (new_graph, event)
 }
@@ -269,7 +223,7 @@ pub async fn schedule_link_join(
         }
     }
     new_graph.recompute_properties(shortest_path_type).await;
-    let event = Event::new(1, time);
+    let event = Event::new(EventKind::NextGraph, time);
 
     (new_graph, event, link_existed)
 }
@@ -299,7 +253,7 @@ pub async fn schedule_new_link(
         )
         .await;
     new_graph.recompute_properties(shortest_path_type).await;
-    let event = Event::new(1, time);
+    let event = Event::new(EventKind::NextGraph, time);
 
     (new_graph, event)
 }
@@ -338,7 +292,7 @@ pub async fn schedule_link_change(
         }
     }
     new_graph.recompute_properties(shortest_path_type).await;
-    let event = Event::new(1, time);
+    let event = Event::new(EventKind::NextGraph, time);
 
     (new_graph, event)
 }
@@ -358,7 +312,7 @@ pub async fn schedule_bridge_join(
         .insert(bridge_name.to_string(), bridge);
 
     new_graph.recompute_properties(shortest_path_type).await;
-    let event = Event::new(1, time);
+    let event = Event::new(EventKind::NextGraph, time);
 
     (new_graph, event)
 }
@@ -378,19 +332,7 @@ pub async fn schedule_bridge_leave(
         .insert(bridge_name.to_string(), bridge);
 
     new_graph.recompute_properties(shortest_path_type).await;
-    let event = Event::new(1, time);
+    let event = Event::new(EventKind::NextGraph, time);
 
     (new_graph, event)
-}
-
-// TODO use an enum, e.g. EventType, instead of event ids
-pub struct Event {
-    pub id: u32,
-    pub time: f32,
-}
-
-impl Event {
-    pub fn new(id: u32, time: f32) -> Event {
-        Event { id: id, time: time }
-    }
 }
