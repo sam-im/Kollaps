@@ -37,8 +37,8 @@ pub fn monitor(ctx: SkBuffContext) -> i64 {
 
 fn try_monitor(ctx: &SkBuffContext) -> Result<(), i64> {
     let ethhdr: EthHdr = ctx.load(0)?;
-    match ethhdr.ether_type {
-        EtherType::Ipv4 => {}
+    match ethhdr.ether_type() {
+        Ok(EtherType::Ipv4) => {}
         _ => return Ok(()),
     }
     let ipv4hdr: Ipv4Hdr = ctx.load(core::mem::size_of::<EthHdr>())?;
