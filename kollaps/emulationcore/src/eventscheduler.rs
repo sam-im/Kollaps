@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::aux::start_script;
-use crate::docker::{start_experiment, stop_experiment};
 use crate::graph::Graph;
+use crate::orchestrator::{Orchestrator, SignalCode};
 use crate::state::State;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -53,13 +53,13 @@ pub struct EventScheduler {
     pub events: Vec<Event>,
     pub state: Arc<Mutex<State>>,
     pub pid: u32,
-    orchestrator: String,
+    orchestrator: Option<Orchestrator>,
     pub script: String,
     pub name: String,
 }
 
 impl EventScheduler {
-    pub fn new(state: Arc<Mutex<State>>, orchestrator: String) -> EventScheduler {
+    pub fn new(state: Arc<Mutex<State>>, orchestrator: Option<Orchestrator>) -> Self {
         EventScheduler {
             events: vec![],
             name: "".to_string(),
@@ -95,28 +95,35 @@ impl EventScheduler {
                 }
                 EventKind::Join => {
                     let id = self.state.lock().await.id.clone();
-
-                    if self.orchestrator == "baremetal" {
-                        if !self.script.is_empty() {
-                            info!(
-                                "EC {}: started experiment with script {}",
-                                self.name,
-                                self.script.clone()
-                            );
-                            start_script(self.script.clone());
-                        } else {
-                            error!("EC {}: script is empty", self.name);
+                    match &self.orchestrator {
+                        Some(o) => {
+                            o.start_experiment(&id).await;
+                            info!("EC {}: started experiment", self.name);
                         }
-                    } else {
-                        tokio::spawn(async move { start_experiment(id).await });
-                        info!("EC {}: started experiment", self.name);
+                        // `None` currently means baremetal deployment
+                        None => {
+                            if self.script.is_empty() {
+                                error!("EC {}: script is empty", self.name);
+                            } else {
+                                info!(
+                                    "EC {}: started experiment with script {}",
+                                    self.name,
+                                    self.script.clone()
+                                );
+                                start_script(self.script.clone());
+                            }
+                        }
                     }
                 }
                 EventKind::Leave => {
-                    stop_experiment(self.pid, 2);
+                    if let Some(o) = &self.orchestrator {
+                        o.stop_experiment(self.pid, SignalCode::SigInt).await
+                    }
                 }
                 EventKind::Crash => {
-                    stop_experiment(self.pid, 3);
+                    if let Some(o) = &self.orchestrator {
+                        o.stop_experiment(self.pid, SignalCode::SigKill).await
+                    }
                 }
                 EventKind::Disconnect => {
                     self.state.lock().await.tcal_client.disconnect().await;

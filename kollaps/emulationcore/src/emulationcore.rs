@@ -4,9 +4,9 @@ use tracing::{error, info, warn};
 use crate::aux::convert_to_int;
 use crate::aux::{get_own_ip, print_message};
 use crate::communication::Communication;
-use crate::docker::stop_experiment;
 use crate::eventscheduler::EventScheduler;
 use crate::graph::Graph;
+use crate::orchestrator::{Orchestrator, SignalCode};
 use crate::state::State;
 use crate::xmlgraphparser::XMLGraphParser;
 use k8s_openapi::api::core::v1::Pod;
@@ -21,6 +21,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::os::unix::raw::pid_t;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time;
@@ -29,7 +30,7 @@ use subprocess::Popen;
 use subprocess::PopenConfig;
 use tokio::sync::Mutex;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct EmulationCore {
     id: String,
@@ -41,7 +42,7 @@ pub struct EmulationCore {
     lasttime: Option<Instant>,
     usages: Arc<Mutex<HashMap<u32, u32>>>,
     link_count: u32,
-    orchestrator: String,
+    orchestrator: Option<Orchestrator>,
     cm_file: String,
     topology_file: String,
     networkdevice: String,
@@ -54,15 +55,12 @@ pub struct EmulationCore {
 }
 
 impl EmulationCore {
-    pub fn new(id: String, pid: u32, orchestrator: String) -> EmulationCore {
+    pub fn new(id: String, pid: u32, orchestrator: Option<Orchestrator>) -> Self {
         let state = Arc::new(Mutex::new(State::new(id.clone())));
-        let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(
-            state.clone(),
-            orchestrator.clone(),
-        )));
+        let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(state.clone(), orchestrator)));
         let communication = Communication::new(id.clone());
 
-        EmulationCore {
+        Self {
             id: id,
             ip: 0,
             name: "".to_string(),
@@ -111,9 +109,12 @@ impl EmulationCore {
         self.pool_period = parser.pool_period;
         self.max_age = parser.max_age;
 
+        let self_addr = get_own_ip(Some(self.networkdevice.clone()));
         initial_graph
-            .set_graph_root_baremetal(self.networkdevice.clone())
-            .await;
+            .set_graph_root(self_addr)
+            .await
+            .expect("failed to set graph root");
+
         self.calculate_paths(&mut initial_graph).await;
 
         let (graphs, events) = parser.parse_schedule(initial_graph, &doc).await;
@@ -226,14 +227,16 @@ impl EmulationCore {
         //Get ips of all containers
         info!("EC {} - retrieving container IPs", self.name);
         tokio::time::sleep(Duration::from_secs(2)).await;
-        if self.orchestrator == "docker" {
-            initial_graph.resolve_hostnames_docker().await;
-        } else {
-            let _ = resolve_hostnames_kubernetes(&mut initial_graph).await;
+        if let Some(o) = &self.orchestrator {
+            let _ = o.resolve_hostnames(&mut initial_graph).await;
         }
-        info!("EC {}: retrieved container IPs", self.name);
 
-        initial_graph.set_graph_root().await;
+        let self_addr = get_own_ip(None);
+        initial_graph
+            .set_graph_root(self_addr)
+            .await
+            .expect("failed to set graph root");
+
         self.calculate_paths(&mut initial_graph).await;
 
         let (graphs, events) = parser.parse_schedule(initial_graph, &doc).await;
@@ -300,7 +303,10 @@ impl EmulationCore {
         let start = self.start.clone();
         let shutdown = self.shutdown.clone();
 
-        tokio::spawn(async move { accept_loop(scheduler, pid, start, shutdown).await });
+        let orchestrator = self.orchestrator.clone();
+        tokio::spawn(
+            async move { accept_loop(scheduler, orchestrator, pid, start, shutdown).await },
+        );
 
         info!(
             self.pool_period,
@@ -482,6 +488,7 @@ impl EmulationCore {
 /// Inserts received message data from monitor's eBPF PerfEventMap into
 /// `usages` hashmap.
 async fn get_local_usage(usages_handle: Arc<Mutex<HashMap<u32, u32>>>) {
+    // TODO set to EmulationCore's networkdevice field for baremetal
     let iface = "eth0";
     let mut ebpf_handle = monitor::run(iface).await.unwrap();
 
@@ -493,6 +500,7 @@ async fn get_local_usage(usages_handle: Arc<Mutex<HashMap<u32, u32>>>) {
 //Waits to accept dashboard connection
 async fn accept_loop(
     eventscheduler: Arc<Mutex<EventScheduler>>,
+    orchestrator: Option<Orchestrator>,
     pid: u32,
     start: Arc<Mutex<bool>>,
     shutdown: Arc<Mutex<bool>>,
@@ -507,6 +515,7 @@ async fn accept_loop(
         let _ = receive_commands(
             stream,
             eventscheduler.clone(),
+            orchestrator,
             pid,
             start.clone(),
             shutdown.clone(),
@@ -520,6 +529,7 @@ async fn accept_loop(
 async fn receive_commands(
     mut stream: tokio::net::TcpStream,
     eventscheduler: Arc<tokio::sync::Mutex<EventScheduler>>,
+    orchestrator: Option<Orchestrator>,
     pid: u32,
     start: Arc<Mutex<bool>>,
     shutdown: Arc<Mutex<bool>>,
@@ -538,7 +548,10 @@ async fn receive_commands(
             Ok(_) => match buf.first() {
                 Some(cmd) if SHUTDOWN_COMMAND.eq(cmd) => {
                     *shutdown.lock().await = true;
-                    stop_experiment(pid, 3);
+                    orchestrator
+                        .unwrap()
+                        .stop_experiment(pid, SignalCode::SigInt)
+                        .await;
                 }
                 Some(cmd) if READY_COMMAND.eq(cmd) => {
                     let _ = stream.write_all(&[ACK]).await.map_err(|e| warn!("{:?}", e));
@@ -563,57 +576,6 @@ async fn receive_commands(
 //Start the experiment
 async fn start_events(es_handle: Arc<Mutex<EventScheduler>>) {
     es_handle.lock().await.start().await;
-}
-
-async fn resolve_hostnames_kubernetes(graph: &mut Graph) -> Result<()> {
-    let mut services_by_name = graph.services_by_name.clone();
-    for (name, services) in services_by_name.iter_mut() {
-        let mut ips: Vec<Ipv4Addr>;
-        loop {
-            ips = vec![];
-            let client = Client::try_default().await?;
-
-            let pods: Api<Pod> = Api::default_namespaced(client);
-            for p in pods.list(&ListParams::default()).await? {
-                let key = "KOLLAPS_UUID";
-                let uuid = match env::var(key) {
-                    Ok(val) => Some(val),
-                    Err(_e) => None,
-                };
-                let name = format!("{}-{}", name, uuid.as_ref().unwrap());
-                if p.name().starts_with(&name) {
-                    let ip_string = p.status.unwrap().pod_ip;
-
-                    if ip_string.is_none() {
-                        continue;
-                    }
-                    let ip_string = ip_string.unwrap();
-
-                    let ip = IpAddr::from_str(&ip_string).unwrap();
-                    match ip {
-                        IpAddr::V4(ipv4) => {
-                            ips.push(ipv4);
-                        }
-                        IpAddr::V6(_ipv6) => break,
-                    }
-                }
-            }
-            if ips.len() == services.len() {
-                break;
-            }
-
-            tokio::time::sleep(time::Duration::from_secs(1)).await;
-        }
-        ips.sort();
-        for (i, service) in services.iter().enumerate() {
-            let int_ip = convert_to_int(ips[i].octets());
-            service.lock().await.ip = int_ip;
-            service.lock().await.replica_id = i;
-            graph.services.insert(int_ip, Arc::clone(service));
-        }
-    }
-
-    Ok(())
 }
 
 //Waits to accept dashboard connection

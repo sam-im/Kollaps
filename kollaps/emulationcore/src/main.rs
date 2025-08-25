@@ -15,12 +15,12 @@
 
 mod aux;
 mod communication;
-mod docker;
 mod elements;
 mod emulation;
 mod emulationcore;
 mod eventscheduler;
 mod graph;
+mod orchestrator;
 mod state;
 mod xmlgraphparser;
 
@@ -28,6 +28,7 @@ use crate::emulationcore::EmulationCore;
 
 use std::env;
 
+use orchestrator::{Orchestrator, docker::DockerOrchestrator, kubernetes::KubernetesOrchestrator};
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
@@ -43,7 +44,6 @@ fn main() {
         .build()
         .unwrap();
 
-    // TODO argument parsing with an help message
     if env::args().len() == 4 {
         let id = env::args().nth(1).unwrap();
         let pid = env::args().nth(2).unwrap().parse::<u32>().unwrap();
@@ -61,7 +61,12 @@ fn main() {
 
 async fn container_deployment(id: String, pid: u32, orchestrator: String) {
     info!("EC {}: starting", id);
-    let mut ec = EmulationCore::new(id.clone(), pid, orchestrator);
+    let orchestrator = match orchestrator.as_str() {
+        "docker" => Orchestrator::Docker(DockerOrchestrator),
+        "kubernetes" => Orchestrator::Kubernetes(KubernetesOrchestrator),
+        _ => unimplemented!("unkown argument: {}", orchestrator),
+    };
+    let mut ec = EmulationCore::new(id.clone(), pid, Some(orchestrator));
     ec.init().await;
     ec.emulation_loop().await;
     info!("EC {}: stopped", id);
@@ -70,7 +75,7 @@ async fn container_deployment(id: String, pid: u32, orchestrator: String) {
 async fn baremetal_deployment(topology_file: String, cm_file: String, ifname: String) {
     info!("EC: starting");
 
-    let mut ec = EmulationCore::new("".to_string(), 0, "baremetal".to_string());
+    let mut ec = EmulationCore::new("".to_string(), 0, None);
     ec.set_topology_file(topology_file);
     ec.set_cm_file(cm_file);
     ec.set_network_device(ifname);

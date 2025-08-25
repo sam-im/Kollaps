@@ -13,14 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::aux::{Dijkstraentry, convert_to_int, get_own_ip};
+use crate::aux::Dijkstraentry;
 use crate::elements::{Flowu16, Link, Path, Service};
 use rand::Rng;
 use std::collections::HashMap;
 use std::f32::INFINITY;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info};
 
 //Graph of the current network state
@@ -486,123 +485,18 @@ impl Graph {
         }
     }
 
-    //get ips of containers
-    pub async fn resolve_hostnames_docker(&mut self) {
-        use hickory_client::client::{Client, ClientHandle};
-        use hickory_client::proto::{
-            rr::{DNSClass, Name, RecordType},
-            runtime::TokioRuntimeProvider,
-            tcp::TcpClientStream,
-        };
-        use std::{
-            env,
-            net::{IpAddr, Ipv4Addr, SocketAddr},
-            str::FromStr,
-        };
-
-        let sleeptime = Duration::from_millis(500);
-        let (stream, sender) = TcpClientStream::new(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 11)), 53),
-            None,
-            None,
-            TokioRuntimeProvider::new(),
-        );
-        let client = Client::new(stream, sender, None);
-
-        let (mut client, bg) = client.await.expect("connection failed");
-        let bg_handle = tokio::spawn(bg);
-
-        for (name, services) in self.services_by_name.iter_mut() {
-            let mut ips: Vec<Ipv4Addr>;
-            loop {
-                ips = vec![];
-
-                let key = "KOLLAPS_UUID";
-                let uuid = match env::var(key) {
-                    Ok(val) => Some(val),
-                    Err(_e) => None,
-                };
-
-                let query = client.query(
-                    Name::from_str(format!("{}-{}", name, uuid.unwrap()).as_str()).unwrap(),
-                    DNSClass::IN,
-                    RecordType::A,
-                );
-
-                let response = query.await;
-
-                match response {
-                    Ok(res) => {
-                        res.answers()
-                            .iter()
-                            .map(|res| res.data().ip_addr())
-                            .filter_map(|ip| {
-                                if let Some(IpAddr::V4(ipv4)) = ip {
-                                    info!("Address is {}", ipv4);
-                                    Some(ipv4)
-                                } else {
-                                    None
-                                }
-                            })
-                            .for_each(|ipv4| ips.push(ipv4));
-                    }
-                    Err(e) => {
-                        error!("Error: {}", e);
-                        sleep(sleeptime).await;
-                    }
-                };
-                info!(
-                    "IPS len is {} and services len is {} for name {}",
-                    ips.len(),
-                    services.len(),
-                    name.clone()
-                );
-
-                if ips.len() == services.len() {
-                    break;
-                }
-                sleep(sleeptime).await;
-            }
-            ips.sort();
-
-            for (i, service) in services.iter().enumerate() {
-                let int_ip = convert_to_int(ips[i].octets());
-                service.lock().await.ip = int_ip;
-                service.lock().await.replica_id = i;
-                self.services.insert(int_ip, Arc::clone(service));
-                self.ips.push(int_ip);
-            }
-        }
-        bg_handle.abort();
-    }
-
-    pub async fn set_graph_root(&mut self) {
-        loop {
-            sleep(Duration::from_secs(1)).await;
-            let ip = get_own_ip(None);
-
-            match self.services.get_mut(&ip) {
-                Some(root) => {
-                    self.graph_root = Some(Arc::clone(root));
-                    break;
-                }
-                None => error!("EC - {} couldn't find service for IP {}", self.name, ip),
-            }
-        }
-    }
-
-    pub async fn set_graph_root_baremetal(&mut self, networkdevice: String) {
-        loop {
-            sleep(Duration::from_secs(1)).await;
-            let ip = get_own_ip(Some(networkdevice.clone()));
-            let root = self.services.get_mut(&ip);
-
-            if root.is_none() {
-                error!("Didnt find service for IP {} ", ip);
-            } else {
-                let root = root.unwrap();
+    pub async fn set_graph_root(&mut self, self_addr: u32) -> Result<(), ()> {
+        match self.services.get_mut(&self_addr) {
+            Some(root) => {
                 self.graph_root = Some(Arc::clone(root));
-                break;
+                Ok(())
+            }
+            None => {
+                error!(
+                    "EC {}: couldn't set graph root for self IP {}",
+                    self.name, self_addr
+                );
+                Err(())
             }
         }
     }
