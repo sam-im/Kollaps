@@ -14,7 +14,6 @@
 // limitations under the License.
 
 use emulationcore::xmlgraphparser::XMLGraphParser;
-use roxmltree::Document;
 use std::env;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
@@ -46,13 +45,12 @@ fn main() -> Result<()> {
 async fn process_command(topology_file: String, command: String) -> Result<()> {
     if command == "ready" {
         let text = std::fs::read_to_string(topology_file)?;
-        let doc = Document::parse(&text)?;
 
-        let mut parser = XMLGraphParser::new("baremetal".to_string());
-        let _ = parser.fill_graph(&doc).await;
+        let parser = XMLGraphParser::try_new(&text, "baremetal".to_string()).expect("valid xml topology file");
+        let (config, _) = parser.fill_graph().await;
 
         let mut remote_ips = vec![];
-        let ips = parser.ips.clone();
+        let ips = config.ips.clone();
 
         let mut file = OpenOptions::new()
             .write(true)
@@ -62,7 +60,7 @@ async fn process_command(topology_file: String, command: String) -> Result<()> {
             .await?;
 
         for ip in ips {
-            let ip_with_port = if ip == parser.controller_ip {
+            let ip_with_port = if ip == config.controller_ip {
                 format!("0.0.0.0:{}", "7073")
             } else {
                 format!("{}:{}", ip, "7073")

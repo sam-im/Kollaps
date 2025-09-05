@@ -108,7 +108,7 @@ impl DockerOrchestrator {
         let docker = docker_api::Docker::unix("/var/run/docker.sock");
         let container = docker.containers().get(id);
 
-        let command_string = match get_command_string(id.clone()).await {
+        let command_string = match get_command_string(id).await {
             Some(cmd_str) => cmd_str.replace('"', "\"").replace("'", "\\'"),
             None => {
                 error!("EC: leaving start experiment nothing to do");

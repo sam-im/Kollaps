@@ -14,7 +14,6 @@
 // limitations under the License.
 
 use crate::aux::convert_to_int;
-use crate::aux::print_and_fail;
 use crate::eventscheduler::{self, Event, EventKind};
 use crate::graph::Graph;
 use rand::prelude::*;
@@ -26,8 +25,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use tracing::warn;
 
-pub struct XMLGraphParser {
-    mode: String,
+pub struct Config {
     pub ips: Vec<String>,
     pub controller_ip: String,
     pub shortest_path_type: String,
@@ -35,24 +33,35 @@ pub struct XMLGraphParser {
     pub max_age: u32,
 }
 
-impl XMLGraphParser {
-    pub fn new(mode: String) -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Self {
-            mode: mode,
-            ips: vec![],
-            controller_ip: "".to_string(),
+            ips: Vec::new(),
+            controller_ip: String::new(),
             shortest_path_type: "hop".to_string(),
             pool_period: 0.05,
             max_age: 2,
         }
     }
+}
+
+pub struct XMLGraphParser<'a> {
+    document: Document<'a>,
+    mode: String,
+}
+
+impl<'a> XMLGraphParser<'a> {
+    pub fn try_new(text: &'a str, mode: String) -> Result<Self, roxmltree::Error> {
+        let document = Document::parse(&text)?;
+        Ok(Self { document, mode })
+    }
 
     /// Create and fill a `Graph` according to the supplied topology XML `roxmltree::Document`.
     /// Current implementation uses the returned graph as the initial graph for `parse_schedule`.
-    pub async fn fill_graph<'a>(&mut self, doc: &Document<'a>) -> Graph {
+    pub async fn fill_graph(&self) -> (Config, Graph) {
         let mut graph = Graph::new();
 
-        let root = doc.root().first_child().unwrap();
+        let root = self.document.root().first_child().unwrap();
 
         if root.tag_name().name() != "experiment" {
             panic!("Not a valid Kollap topology file, root is not 'experiment'");
@@ -62,7 +71,7 @@ impl XMLGraphParser {
             panic!("<experiment boot = > The experiment needs a valid boostrapper image name");
         }
 
-        let mut config: Option<Node> = None;
+        let mut config_node: Option<Node> = None;
         let mut services: Option<Node> = None;
         let mut bridges: Option<Node> = None;
         let mut links: Option<Node> = None;
@@ -72,8 +81,8 @@ impl XMLGraphParser {
             .filter(|node| node.is_element())
             .for_each(|node| match node.tag_name().name() {
                 "config" => {
-                    if config.is_none() {
-                        config = Some(node);
+                    if config_node.is_none() {
+                        config_node = Some(node);
                     }
                 }
                 "services" => {
@@ -103,13 +112,16 @@ impl XMLGraphParser {
                 _ => (),
             });
 
-        if let Some(config) = config {
-            self.parse_config(config);
+        let mut config = Config::default();
+
+        if let Some(c) = config_node {
+            self.parse_config(c, &mut config);
         }
 
         self.parse_services(
             services.expect("declared services in topology file"),
             dynamic,
+            &mut config,
             &mut graph,
         )
         .await;
@@ -121,35 +133,36 @@ impl XMLGraphParser {
         self.parse_links(links.expect("declared links in topology file"), &mut graph)
             .await;
 
-        graph
+        (config, graph)
     }
 
-    fn parse_config<'a>(&mut self, config: Node<'a, 'a>) {
-        for property in config.children() {
+    fn parse_config(&self, config_node: Node<'a, 'a>, config: &mut Config) {
+        for property in config_node.children() {
             if !property.is_element() {
                 continue;
             }
             if property.has_attribute("shortest_path") {
                 let shortest_path_type = property.attribute("shortest_path").unwrap();
-                self.shortest_path_type = shortest_path_type.to_string();
+                config.shortest_path_type = shortest_path_type.to_string();
             }
 
             if property.has_attribute("pool_period") {
                 let pool_period: f32 = property.attribute("pool_period").unwrap().parse().unwrap();
-                self.pool_period = pool_period;
+                config.pool_period = pool_period;
             }
 
             if property.has_attribute("max_age") {
                 let max_age: u32 = property.attribute("max_age").unwrap().parse().unwrap();
-                self.max_age = max_age;
+                config.max_age = max_age;
             }
         }
     }
 
-    async fn parse_services<'a>(
-        &mut self,
+    async fn parse_services(
+        &self,
         services: Node<'a, 'a>,
         dynamic: Option<Node<'a, 'a>>,
+        config: &mut Config,
         graph: &mut Graph,
     ) {
         for service in services.children() {
@@ -157,18 +170,18 @@ impl XMLGraphParser {
                 continue;
             }
             if service.tag_name().name() != "service" {
-                print_and_fail(format!(
+                panic!(
                     "Invalid tag inside <services> {}",
                     service.tag_name().name()
-                ));
+                );
             }
             if self.mode == "container"
                 && (!service.has_attribute("name") || !service.has_attribute("image"))
             {
-                print_and_fail("A service needs a name and an image attribute.".to_string());
+                panic!("A service needs a name and an image attribute.");
             }
             if self.mode == "baremetal" && !service.has_attribute("name") {
-                print_and_fail("A service needs a name".to_string());
+                panic!("A service needs a name.");
             }
             let mut paths: Vec<String> = vec![];
             if service.has_attribute("activepaths") {
@@ -228,7 +241,7 @@ impl XMLGraphParser {
                     let ip = service.attribute("ip");
 
                     if let Some(ip) = ip {
-                        self.ips.push(ip.to_string());
+                        config.ips.push(ip.to_string());
                         let ip = IpAddr::from_str(ip).unwrap();
                         match ip {
                             IpAddr::V4(ipv4) => {
@@ -257,7 +270,7 @@ impl XMLGraphParser {
 
                     if self.mode == "baremetal" {
                         let controller_ip = service.attribute("controller_ip");
-                        self.controller_ip = controller_ip
+                        config.controller_ip = controller_ip
                             .expect("controller requires an IP")
                             .to_string();
                     }
@@ -266,7 +279,7 @@ impl XMLGraphParser {
         }
     }
 
-    fn process_active_paths(&mut self, activepaths: &str) -> Vec<String> {
+    fn process_active_paths(&self, activepaths: &str) -> Vec<String> {
         let activepaths = activepaths.replace("[", "");
         let activepaths = activepaths.replace("]", "");
 
@@ -281,7 +294,7 @@ impl XMLGraphParser {
     }
 
     fn calculate_required_replicas(
-        &mut self,
+        &self,
         dynamic: Option<Node>,
         service: Node,
         replicas: u32,
@@ -314,7 +327,7 @@ impl XMLGraphParser {
                 continue;
             }
             if event.tag_name().name() != "schedule" {
-                print_and_fail("Only <schedule> is allowed inside <dynamic>".to_string());
+                panic!("Only <schedule> is allowed inside <dynamic>");
             }
 
             if event.has_attribute("name")
@@ -328,7 +341,7 @@ impl XMLGraphParser {
                 let event_time: f32 = event.attribute("time").unwrap().parse().unwrap();
 
                 if event_time.is_nan() {
-                    print_and_fail("time attribute must be a valid real number".to_string());
+                    panic!("time attribute must be a valid real number");
                 }
 
                 let mut event_amount: f32 = 1.0;
@@ -337,7 +350,7 @@ impl XMLGraphParser {
                     event_amount = event.attribute("amount").unwrap().parse().unwrap();
 
                     if event_amount.is_nan() {
-                        print_and_fail("amount attribute must be an integer >= 1".to_string());
+                        panic!("amount attribute must be an integer >= 1");
                     }
                 }
 
@@ -392,11 +405,11 @@ impl XMLGraphParser {
             if event[event_type] == disconnect_event {
                 disconnected += event[amount];
                 if event[amount] > current_replicas {
-                    print_and_fail(format!(
+                    panic!(
                         "Dynamic section for {} disconnects more replicas than are joined at second {:.1}",
                         service.attribute("name").unwrap(),
                         event[time]
-                    ));
+                    );
                 }
             }
 
@@ -404,20 +417,20 @@ impl XMLGraphParser {
                 disconnected -= event[amount];
 
                 if event[amount] > disconnected {
-                    print_and_fail(format!(
+                    panic!(
                         "Dynamic section for {} reconnects more replicas than are joined at second {:.1}",
                         service.attribute("name").unwrap(),
                         event[time]
-                    ));
+                    );
                 }
             }
 
             if current_replicas < 0.0 {
-                print_and_fail(format!(
+                panic!(
                     "Dynamic section for {} causes a negative number of replicas at second {:.1}",
                     service.attribute("name").unwrap(),
                     event[time]
-                ));
+                );
             }
             if current_replicas > max_replicas {
                 max_replicas = current_replicas;
@@ -431,7 +444,7 @@ impl XMLGraphParser {
         }
     }
 
-    fn parse_bridges<'a>(&mut self, bridges: Node<'a, 'a>, graph: &mut Graph) {
+    fn parse_bridges(&self, bridges: Node<'a, 'a>, graph: &mut Graph) {
         bridges.children().filter(|b| b.is_element()).for_each(|b| {
             if b.tag_name().name() != "bridge" {
                 panic!("Invalid tag inside <bridges>: {}", b.tag_name().name());
@@ -445,7 +458,7 @@ impl XMLGraphParser {
         });
     }
 
-    async fn parse_links<'a>(&mut self, links: Node<'a, 'a>, graph: &mut Graph) {
+    async fn parse_links(&self, links: Node<'a, 'a>, graph: &mut Graph) {
         for link in links.children() {
             if !link.is_element() {
                 continue;
@@ -459,10 +472,7 @@ impl XMLGraphParser {
                 continue;
             }
             if link.tag_name().name() != "link" {
-                print_and_fail(format!(
-                    "Invalid tag inside <link> {}",
-                    link.tag_name().name()
-                ));
+                panic!("Invalid tag inside <link> {}", link.tag_name().name());
             }
 
             if self.mode == "container"
@@ -472,7 +482,7 @@ impl XMLGraphParser {
                     || !link.has_attribute("upload")
                     || !link.has_attribute("network"))
             {
-                print_and_fail("Incomplete network description".to_string());
+                panic!("Incomplete network description");
             }
 
             if self.mode == "baremetal"
@@ -481,7 +491,7 @@ impl XMLGraphParser {
                     || !link.has_attribute("latency")
                     || !link.has_attribute("upload"))
             {
-                print_and_fail("Incomplete network description".to_string());
+                panic!("Incomplete network description");
             }
 
             let source_node = &graph.get_nodes(source.clone())[0];
@@ -526,12 +536,12 @@ impl XMLGraphParser {
 
             if has_upload {
                 let upload_str = link.attribute("upload").unwrap();
-                upload = self.parse_bandwidth(upload_str.to_string());
+                upload = self.parse_bandwidth(upload_str);
             }
 
             if has_download {
                 let download_str = link.attribute("download").unwrap();
-                download = self.parse_bandwidth(download_str.to_string());
+                download = self.parse_bandwidth(download_str);
             }
 
             // if has_upload && !has_download{
@@ -730,7 +740,7 @@ impl XMLGraphParser {
         }
     }
 
-    fn create_meta_bridge(&mut self, graph: &mut Graph) -> String {
+    fn create_meta_bridge(&self, graph: &mut Graph) -> String {
         let random_name = generate(5, charsets::ALPHANUMERIC);
 
         graph.insert_bridge(random_name.clone(), None);
@@ -738,34 +748,29 @@ impl XMLGraphParser {
         random_name
     }
 
-    fn parse_bandwidth(&self, bandwidth: String) -> f32 {
+    fn parse_bandwidth(&self, bandwidth: &str) -> f32 {
         let bandwidth_regex = Regex::new(r"([0-9]+)([KMG])bps").unwrap();
 
-        let multi = 1.00;
         if bandwidth_regex.is_match(&bandwidth) {
             let captures = bandwidth_regex.captures(&bandwidth).unwrap();
             let base: f32 = captures.get(1).unwrap().as_str().parse().unwrap();
             let multiplier = captures.get(2).unwrap().as_str();
-            if multiplier == "K" {
-                return base * 1000.0 * multi;
-            }
-            if multiplier == "M" {
-                return base * 1000.0 * 1000.0 * multi;
-            }
-            if multiplier == "G" {
-                return base * 1000.0 * 1000.0 * 1000.0 * multi;
+
+            match multiplier {
+                "K" => base * 1000.0,
+                "M" => base * 1000.0 * 1000.0,
+                "G" => base * 1000.0 * 1000.0 * 1000.0,
+                _ => 0.0, // not reachable (regex)
             }
         } else {
-            // print and fail
-            return 0.0;
+            panic!("failed to parse bandwidth: {}", bandwidth);
         }
-        0.0
     }
 
-    pub async fn parse_schedule<'a>(
+    pub async fn parse_schedule(
         &self,
         initial_graph: Graph,
-        tree: &Document<'a>,
+        config: &Config,
     ) -> (Vec<Graph>, Vec<Event>) {
         let graph_root_handle = initial_graph
             .graph_root
@@ -775,7 +780,7 @@ impl XMLGraphParser {
         let mut events: Vec<Event> = Vec::new();
         let mut graphs = vec![initial_graph];
 
-        let root = tree.root().first_child().unwrap();
+        let root = self.document.root().first_child().unwrap();
 
         let mut dynamic = None;
 
@@ -850,7 +855,7 @@ impl XMLGraphParser {
                     if event.attribute("action").unwrap() == "join" {
                         let (new_graph, new_event) = eventscheduler::schedule_bridge_join(
                             graphs.last().unwrap(),
-                            &self.shortest_path_type,
+                            &config.shortest_path_type,
                             time,
                             &node_name,
                         )
@@ -861,7 +866,7 @@ impl XMLGraphParser {
                     if event.attribute("action").unwrap() == "leave" {
                         let (new_graph, new_event) = eventscheduler::schedule_bridge_leave(
                             graphs.last().unwrap(),
-                            &self.shortest_path_type,
+                            &config.shortest_path_type,
                             time,
                             &node_name,
                         )
@@ -943,7 +948,8 @@ impl XMLGraphParser {
                         if graph_root_handle.lock().await.replica_id == id {
                             if event_type == "leave" {
                                 // temporary fix before we change all wiki
-                                events.push(Event::new(EventKind::Crash, time));
+                                // events.push(Event::new(EventKind::Crash, time));
+                                events.push(Event::new(EventKind::Leave, time));
                             }
 
                             if event_type == "crash" {
@@ -1020,7 +1026,7 @@ impl XMLGraphParser {
                     if event_type == "leave" {
                         let (new_graph, event) = eventscheduler::schedule_link_leave(
                             graphs.last().unwrap(),
-                            &self.shortest_path_type,
+                            &config.shortest_path_type,
                             time,
                             origin,
                             destination,
@@ -1037,7 +1043,7 @@ impl XMLGraphParser {
                         let (new_graph, new_event, link_existed) =
                             eventscheduler::schedule_link_join(
                                 graphs.last().unwrap(),
-                                &self.shortest_path_type,
+                                &config.shortest_path_type,
                                 time,
                                 &origin,
                                 &destination,
@@ -1049,7 +1055,7 @@ impl XMLGraphParser {
                         if link_existed {
                             continue;
                         } else {
-                            let bandwidth = event.attribute("upload").unwrap().to_string();
+                            let bandwidth = event.attribute("upload").unwrap();
 
                             let latency: f32 = event.attribute("latency").unwrap().parse().unwrap();
 
@@ -1067,7 +1073,7 @@ impl XMLGraphParser {
 
                             let (new_graph, new_event) = eventscheduler::schedule_new_link(
                                 graphs.last().unwrap(),
-                                &self.shortest_path_type,
+                                &config.shortest_path_type,
                                 time,
                                 &origin,
                                 &destination,
@@ -1081,10 +1087,10 @@ impl XMLGraphParser {
                             events.push(new_event);
 
                             if event.has_attribute("download") {
-                                let bandwidth = event.attribute("download").unwrap().to_string();
+                                let bandwidth = event.attribute("download").unwrap();
                                 let (new_graph, new_event) = eventscheduler::schedule_new_link(
                                     graphs.last().unwrap(),
-                                    &self.shortest_path_type,
+                                    &config.shortest_path_type,
                                     time,
                                     &destination,
                                     &origin,
@@ -1103,8 +1109,7 @@ impl XMLGraphParser {
                     let mut bandwidth = -1.0;
 
                     if event.has_attribute("upload") {
-                        bandwidth =
-                            self.parse_bandwidth(event.attribute("upload").unwrap().to_string());
+                        bandwidth = self.parse_bandwidth(event.attribute("upload").unwrap());
                     }
 
                     let mut latency = -1.0;
@@ -1126,10 +1131,10 @@ impl XMLGraphParser {
 
                     if event.has_attribute("download") {
                         let download_bw =
-                            self.parse_bandwidth(event.attribute("download").unwrap().to_string());
+                            self.parse_bandwidth(event.attribute("download").unwrap());
                         let (new_graph, new_event) = eventscheduler::schedule_link_change(
                             graphs.last().unwrap(),
-                            &self.shortest_path_type,
+                            &config.shortest_path_type,
                             time,
                             &destination,
                             &origin,
@@ -1144,7 +1149,7 @@ impl XMLGraphParser {
                     }
                     let (new_graph, new_event) = eventscheduler::schedule_link_change(
                         graphs.last().unwrap(),
-                        &self.shortest_path_type,
+                        &config.shortest_path_type,
                         time,
                         &origin,
                         &destination,

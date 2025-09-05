@@ -1,7 +1,3 @@
-use monitor;
-use tracing::{error, info, warn};
-
-use crate::aux::convert_to_int;
 use crate::aux::{get_own_ip, print_message};
 use crate::communication::Communication;
 use crate::eventscheduler::EventScheduler;
@@ -9,26 +5,17 @@ use crate::graph::Graph;
 use crate::orchestrator::{Orchestrator, SignalCode};
 use crate::state::State;
 use crate::xmlgraphparser::XMLGraphParser;
-use k8s_openapi::api::core::v1::Pod;
-use kube::{
-    Client,
-    api::{Api, ListParams, ResourceExt},
-};
-use roxmltree::Document;
+
+use monitor;
 use std::collections::HashMap;
-use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
-use std::os::unix::raw::pid_t;
-use std::str::FromStr;
 use std::sync::Arc;
-use std::time;
 use std::time::{Duration, Instant};
 use subprocess::Popen;
 use subprocess::PopenConfig;
 use tokio::sync::Mutex;
+use tracing::{error, info, warn};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -100,14 +87,14 @@ impl EmulationCore {
         self.state.lock().await.name = self.name.clone();
 
         let text = std::fs::read_to_string(self.topology_file.clone()).unwrap();
-        let doc = Document::parse(&text).unwrap();
-        let mut parser = XMLGraphParser::new("baremetal".to_string());
+        let parser = XMLGraphParser::try_new(&text, "baremetal".to_string())
+            .expect("topology file must be valid xml");
 
-        let mut initial_graph = parser.fill_graph(&doc).await;
+        let (config, mut initial_graph) = parser.fill_graph().await;
 
-        self.shortest_path_type = parser.shortest_path_type.to_string();
-        self.pool_period = parser.pool_period;
-        self.max_age = parser.max_age;
+        self.shortest_path_type = config.shortest_path_type.to_string();
+        self.pool_period = config.pool_period;
+        self.max_age = config.max_age;
 
         let self_addr = get_own_ip(Some(self.networkdevice.clone()));
         initial_graph
@@ -117,7 +104,7 @@ impl EmulationCore {
 
         self.calculate_paths(&mut initial_graph).await;
 
-        let (graphs, events) = parser.parse_schedule(initial_graph, &doc).await;
+        let (graphs, events) = parser.parse_schedule(initial_graph, &config).await;
 
         // Collect parsed graphs and events
         self.state.lock().await.graphs = graphs
@@ -215,14 +202,13 @@ impl EmulationCore {
     pub async fn init(&mut self) {
         //Parse the topology
         let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
-        let doc = Document::parse(&text).unwrap();
-        let mut parser = XMLGraphParser::new("container".to_string());
+        let parser = XMLGraphParser::try_new(&text, "container".to_string())
+            .expect("topology must be a valid xml file");
+        let (config, mut initial_graph) = parser.fill_graph().await;
 
-        let mut initial_graph = parser.fill_graph(&doc).await;
-
-        self.shortest_path_type = parser.shortest_path_type.clone();
-        self.pool_period = parser.pool_period;
-        self.max_age = parser.max_age;
+        self.shortest_path_type = config.shortest_path_type.clone();
+        self.pool_period = config.pool_period;
+        self.max_age = config.max_age;
 
         //Get ips of all containers
         info!("EC {} - retrieving container IPs", self.name);
@@ -239,7 +225,7 @@ impl EmulationCore {
 
         self.calculate_paths(&mut initial_graph).await;
 
-        let (graphs, events) = parser.parse_schedule(initial_graph, &doc).await;
+        let (graphs, events) = parser.parse_schedule(initial_graph, &config).await;
 
         // Collect parsed graph and properties
         self.state.lock().await.graphs = graphs
