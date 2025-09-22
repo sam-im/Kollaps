@@ -66,12 +66,4 @@ impl KubernetesOrchestrator {
 
         Ok(())
     }
-
-    pub async fn start_experiment(&self, id: &str) {
-        unimplemented!()
-    }
-
-    pub async fn stop_experiment(&self, pid: u32, signal_code: super::SignalCode) {
-        unimplemented!()
-    }
 }

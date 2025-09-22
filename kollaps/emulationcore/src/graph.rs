@@ -509,8 +509,7 @@ impl Graph {
             .lock()
             .await
             .hostname
-            .clone()
-            .to_string();
+            .clone();
         self.name = name.clone();
         return name.clone();
     }

@@ -38,8 +38,7 @@ fn main() {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+    let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();

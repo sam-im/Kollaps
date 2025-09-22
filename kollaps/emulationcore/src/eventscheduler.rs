@@ -59,12 +59,12 @@ pub struct EventScheduler {
 }
 
 impl EventScheduler {
-    pub fn new(state: Arc<Mutex<State>>, orchestrator: Option<Orchestrator>) -> Self {
+    pub fn new(state: Arc<Mutex<State>>, orchestrator: Option<Orchestrator>, pid: u32) -> Self {
         EventScheduler {
             events: vec![],
             name: "".to_string(),
-            state: state,
-            pid: 0,
+            state,
+            pid,
             orchestrator,
             script: String::new(),
         }
@@ -76,6 +76,11 @@ impl EventScheduler {
     }
 
     pub async fn start(&mut self) {
+        assert!(
+            self.pid != 0,
+            "eventscheduler.pid must be set before calling start"
+        );
+
         info!("EC {}: event scheduler started", self.name);
         self.sort_events();
 
@@ -235,6 +240,7 @@ pub async fn schedule_link_join(
     (new_graph, event, link_existed)
 }
 
+// TODO: consider moving to xmlgraphparser
 pub async fn schedule_new_link(
     graph: &Graph,
     shortest_path_type: &str,

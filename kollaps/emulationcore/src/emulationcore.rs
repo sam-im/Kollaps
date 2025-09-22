@@ -1,7 +1,6 @@
 use crate::aux::{get_own_ip, print_message};
 use crate::communication::Communication;
 use crate::eventscheduler::EventScheduler;
-use crate::graph::Graph;
 use crate::orchestrator::{Orchestrator, SignalCode};
 use crate::state::State;
 use crate::xmlgraphparser::XMLGraphParser;
@@ -44,7 +43,11 @@ pub struct EmulationCore {
 impl EmulationCore {
     pub fn new(id: String, pid: u32, orchestrator: Option<Orchestrator>) -> Self {
         let state = Arc::new(Mutex::new(State::new(id.clone())));
-        let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(state.clone(), orchestrator)));
+        let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(
+            state.clone(),
+            orchestrator,
+            pid,
+        )));
         let communication = Communication::new(id.clone());
 
         Self {
@@ -102,7 +105,12 @@ impl EmulationCore {
             .await
             .expect("failed to set graph root");
 
-        self.calculate_paths(&mut initial_graph).await;
+        initial_graph
+            .recompute_properties(&self.shortest_path_type)
+            .await;
+        self.name = initial_graph.get_name().await;
+        self.scheduler.lock().await.name = self.name.clone();
+        self.state.lock().await.name = self.name.clone();
 
         let (graphs, events) = parser.parse_schedule(initial_graph, &config).await;
 
@@ -125,17 +133,16 @@ impl EmulationCore {
             .keys()
             .len();
 
-        //Get own ip with the provided network device
-        self.ip = get_own_ip(Some(self.networkdevice.clone()));
+        // Get own ip with the provided network device
+        self.ip = self_addr;
 
-        //id is the same as the ip in baremetal
+        // id is the same as the ip in baremetal
         self.id = self.ip.to_string();
 
-        //Start the CM process
+        // Start the CM process
         let process = self.start_cm(service_count).await;
 
-        self.scheduler.lock().await.sort_events();
-        self.scheduler.lock().await.pid = self.pid;
+        self.scheduler.lock().await.pid = self.pid; // self.start_cm modifies the pid
 
         self.scheduler.lock().await.script = self
             .state
@@ -152,7 +159,7 @@ impl EmulationCore {
             .script
             .clone();
 
-        //Get how many links we have in the experiment if >255 use u16 else u8
+        // Get how many links we have in the experiment if >255 use u16 else u8
         let removed_links_len = self
             .state
             .lock()
@@ -190,7 +197,7 @@ impl EmulationCore {
 
         self.comms.init(self.state.clone()).await;
 
-        //create variables to send to thread
+        // create variables to send to thread
         let scheduler = self.scheduler.clone();
         let shutdown = self.shutdown.clone();
 
@@ -200,7 +207,7 @@ impl EmulationCore {
     }
 
     pub async fn init(&mut self) {
-        //Parse the topology
+        // Parse the topology
         let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
         let parser = XMLGraphParser::try_new(&text, "container".to_string())
             .expect("topology must be a valid xml file");
@@ -210,7 +217,7 @@ impl EmulationCore {
         self.pool_period = config.pool_period;
         self.max_age = config.max_age;
 
-        //Get ips of all containers
+        // Get ips of all containers
         info!("EC {} - retrieving container IPs", self.name);
         tokio::time::sleep(Duration::from_secs(2)).await;
         if let Some(o) = &self.orchestrator {
@@ -223,7 +230,12 @@ impl EmulationCore {
             .await
             .expect("failed to set graph root");
 
-        self.calculate_paths(&mut initial_graph).await;
+        initial_graph
+            .recompute_properties(&self.shortest_path_type)
+            .await;
+        self.name = initial_graph.get_name().await;
+        self.state.lock().await.name = self.name.clone();
+        self.scheduler.lock().await.name = self.name.clone();
 
         let (graphs, events) = parser.parse_schedule(initial_graph, &config).await;
 
@@ -235,14 +247,9 @@ impl EmulationCore {
         self.state.lock().await.graph_counter = graphs.len();
         self.scheduler.lock().await.events = events;
 
-        //Set name for debug
-        self.scheduler.lock().await.name = self.name.clone();
-
-        self.scheduler.lock().await.sort_events(); // TODO move these to scheduler start loop
         self.state.lock().await.shrink_maps().await;
-        self.scheduler.lock().await.pid = self.pid;
 
-        //Get how many links we have in the experiment if >255 use u16 else u8
+        // Get how many links we have in the experiment if >255 use u16 else u8
         let removed_links_len = self
             .state
             .lock()
@@ -264,7 +271,7 @@ impl EmulationCore {
             .len();
         self.link_count = (links_len + removed_links_len) as u32;
 
-        //Start communication
+        // Start communication
         self.comms.init(self.state.clone()).await;
 
         self.state
@@ -275,7 +282,7 @@ impl EmulationCore {
 
         self.ip = get_own_ip(None);
 
-        //Start TC structures
+        // Start TC structures
         self.state
             .lock()
             .await
@@ -288,8 +295,8 @@ impl EmulationCore {
         let scheduler = self.scheduler.clone();
         let start = self.start.clone();
         let shutdown = self.shutdown.clone();
-
         let orchestrator = self.orchestrator.clone();
+
         tokio::spawn(
             async move { accept_loop(scheduler, orchestrator, pid, start, shutdown).await },
         );
@@ -305,7 +312,7 @@ impl EmulationCore {
     }
 
     pub async fn start_cm(&mut self, service_count: usize) -> Popen {
-        //Create auxiliary files, CM reads from these files, dashboard is not relevant we just create an empty file
+        // Create auxiliary files, CM reads from these files, dashboard is not relevant we just create an empty file
         OpenOptions::new()
             .write(true)
             .create(true)
@@ -361,19 +368,6 @@ impl EmulationCore {
         return process;
     }
 
-    async fn calculate_paths(&mut self, graph: &mut Graph) {
-        if self.shortest_path_type.eq("hop") {
-            graph.calculate_shortest_paths().await;
-        }
-        if self.shortest_path_type.eq("latency") {
-            graph.calculate_shortest_paths_latency().await;
-        }
-
-        graph.calculate_properties().await;
-        self.name = graph.get_name().await;
-        self.state.lock().await.name = self.name.clone();
-    }
-
     pub async fn setup_ebpf(&mut self) {
         let usages = self.usages.clone();
         tokio::spawn(async move { get_local_usage(usages).await });
@@ -412,7 +406,7 @@ impl EmulationCore {
         }
     }
 
-    //Read from local usages map
+    // Read from local usages map
     async fn check_active_flows(&mut self) {
         let usages = self.usages.lock().await.clone();
 
@@ -451,7 +445,7 @@ impl EmulationCore {
         self.lasttime = Some(Instant::now());
     }
 
-    //Sends metadata to CM
+    // Sends metadata to CM
     async fn broadcast_flows(&mut self) {
         use crate::communication::PathFlowData;
 
@@ -483,7 +477,7 @@ async fn get_local_usage(usages_handle: Arc<Mutex<HashMap<u32, u32>>>) {
     }
 }
 
-//Waits to accept dashboard connection
+// Waits to accept dashboard connection
 async fn accept_loop(
     eventscheduler: Arc<Mutex<EventScheduler>>,
     orchestrator: Option<Orchestrator>,
@@ -511,7 +505,7 @@ async fn accept_loop(
     }
 }
 
-//Receives commands from dashboard
+// Receives commands from dashboard
 async fn receive_commands(
     mut stream: tokio::net::TcpStream,
     eventscheduler: Arc<tokio::sync::Mutex<EventScheduler>>,
@@ -532,6 +526,7 @@ async fn receive_commands(
     loop {
         match stream.read_exact(&mut buf).await {
             Ok(_) => match buf.first() {
+                // TODO consider calling teardown() on tcal_client
                 Some(cmd) if SHUTDOWN_COMMAND.eq(cmd) => {
                     *shutdown.lock().await = true;
                     orchestrator
@@ -544,7 +539,7 @@ async fn receive_commands(
                 }
                 Some(cmd) if START_COMMAND.eq(cmd) => {
                     let es = eventscheduler.clone();
-                    tokio::spawn(async move { start_events(es).await });
+                    tokio::spawn(async move { es.lock().await.start().await });
                     *start.lock().await = true;
                 }
                 Some(bytes) => warn!("Unknown bytes from stream: {:?}", bytes),
@@ -559,12 +554,7 @@ async fn receive_commands(
     Ok(())
 }
 
-//Start the experiment
-async fn start_events(es_handle: Arc<Mutex<EventScheduler>>) {
-    es_handle.lock().await.start().await;
-}
-
-//Waits to accept dashboard connection
+// Waits to accept dashboard connection
 async fn accept_loop_baremetal(
     eventscheduler: Arc<Mutex<EventScheduler>>,
     shutdown: Arc<Mutex<bool>>,
@@ -585,7 +575,7 @@ async fn accept_loop_baremetal(
     }
 }
 
-//Receives commands from dashboard
+// Receives commands from dashboard
 async fn receive_commands_baremetal(
     mut stream: tokio::net::TcpStream,
     eventscheduler: Arc<Mutex<EventScheduler>>,
@@ -626,7 +616,7 @@ async fn receive_commands_baremetal(
                     .map_err(|e| error!("error while writing to stream: {:?}", e));
             }
             Some(cmd) if START_COMMAND.eq(cmd) => {
-                tokio::spawn(async move { start_events(eventscheduler).await });
+                tokio::spawn(async move { eventscheduler.lock().await.start().await });
             }
             Some(byte) => warn!("unkown command byte: {:?}", byte),
             None => warn!("read empty buffer from stream"),
