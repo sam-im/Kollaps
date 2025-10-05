@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::runtime;
 use tokio::time::sleep;
 
 const SHUTDOWN_CMD: u8 = 2;
@@ -32,9 +33,8 @@ fn main() -> Result<()> {
     let topology_file = env::args().nth(1).unwrap();
     let command = env::args().nth(2).unwrap();
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = runtime::Builder::new_current_thread()
         .enable_all()
-        .worker_threads(1)
         .build()?;
 
     rt.block_on(process_command(topology_file, command))?;
@@ -46,7 +46,8 @@ async fn process_command(topology_file: String, command: String) -> Result<()> {
     if command == "ready" {
         let text = std::fs::read_to_string(topology_file)?;
 
-        let parser = XMLGraphParser::try_new(&text, "baremetal".to_string()).expect("valid xml topology file");
+        let parser = XMLGraphParser::try_new(&text, "baremetal".to_string())
+            .expect("valid xml topology file");
         let (config, _) = parser.fill_graph().await;
 
         let mut remote_ips = vec![];

@@ -332,7 +332,6 @@ dependencies = [
  "capnp",
  "capnp-schemas",
  "libc",
- "os_pipe",
  "pyo3",
 ]
 
@@ -376,7 +375,6 @@ name = "controller"
 version = "0.1.0"
 dependencies = [
  "emulationcore",
- "roxmltree",
  "tokio",
 ]
 

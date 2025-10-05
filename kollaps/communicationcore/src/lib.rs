@@ -17,45 +17,26 @@ use capnp::serialize_packed;
 use capnp_schemas::message_capnp::message;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
+
 use std::ffi::CString;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufReader;
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread;
 
-// pipe to write to RM, pipe to read from RM, pipe to read local usage from RM
-struct Communication {
-    writepipe: Option<File>,
-    readpipe: Option<File>,
-    _buf_reader: Option<BufReader<File>>,
+const READ_PIPE_PATH: &str = "/tmp/piperead";
+const WRITE_PIPE_PATH: &str = "/tmp/pipewrite";
+
+static PIPES: OnceLock<Pipes> = OnceLock::new();
+static DASHBOARD: OnceLock<PyObject> = OnceLock::new();
+
+struct Pipes {
+    _write_pipe: File,
+    read_pipe: File,
 }
 
-// docker container id
-static CONTAINERID: OnceLock<String> = OnceLock::new();
-
-// docker container name
-static CONTAINERNAME: OnceLock<String> = OnceLock::new();
-
-// ip of container in int (smallendian)
-static CONTAINERIP: OnceLock<u32> = OnceLock::new();
-
-// limit of links in topology
-static CONTAINERLIMIT: OnceLock<u32> = OnceLock::new();
-
-// init global
-static COMMUNICATION: LazyLock<Mutex<Communication>> = LazyLock::new(|| {
-    Mutex::new(Communication {
-        writepipe: None,
-        readpipe: None,
-        _buf_reader: None,
-    })
-});
-
-// python reference
-static COMMUNICATIONMANAGER: OnceLock<PyObject> = OnceLock::new();
-
-// python module definitions
+// Exports functions to the Python module.
 #[pymodule]
 fn libcommunicationcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(start))?;
@@ -65,76 +46,49 @@ fn libcommunicationcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/**********************************************************************************************
-*       lib functions
-**********************************************************************************************/
-
+// Creates pipes belonging to the Dashboard service.
 #[pyfunction]
-fn start(_py: Python, id: String, name: String, ip: u32, link_count: u32) -> PyResult<()> {
-    CONTAINERID.get_or_init(|| id.clone());
-    CONTAINERNAME.get_or_init(|| name.clone());
-    CONTAINERIP.get_or_init(|| ip);
-    CONTAINERLIMIT.get_or_init(|| if link_count <= 255 { 8 } else { 16 });
+fn start(_py: Python, id: String, _name: String, _ip: u32, _link_count: u32) -> PyResult<()> {
+    println!("Dashboard (communicationcore): starting.");
 
-    //create files
-    let pathwrite = "/tmp/pipewrite";
-    let pathread = "/tmp/piperead";
-    let pathlocal = "/tmp/pipelocal";
-
-    let pathread = format!("{}{}", pathread, id.to_string());
-    let filename = CString::new(pathread.clone()).unwrap();
+    let read_path = format!("{}{}", READ_PIPE_PATH, id);
+    let c_path = CString::new(read_path.clone())?;
     unsafe {
-        libc::mkfifo(filename.as_ptr(), 0o644);
+        libc::mkfifo(c_path.as_ptr(), 0o644);
     }
 
-    let pathwrite = format!("{}{}", pathwrite, id.to_string());
-    let filename = CString::new(pathwrite.clone()).unwrap();
+    let write_path = format!("{}{}", WRITE_PIPE_PATH, id);
+    let c_path = CString::new(write_path.clone())?;
     unsafe {
-        libc::mkfifo(filename.as_ptr(), 0o644);
+        libc::mkfifo(c_path.as_ptr(), 0o644);
     }
 
-    let pathlocal = format!("{}{}", pathlocal, id.to_string());
-    let filename = CString::new(pathlocal.clone()).unwrap();
-    unsafe {
-        libc::mkfifo(filename.as_ptr(), 0o644);
-    }
-
-    //collect pipe for reading
-    print_message("GETTING READ PIPE");
-    let fileread = OpenOptions::new()
+    let read_pipe = OpenOptions::new()
         .read(true)
-        .open(pathread)
-        .expect("file not found");
-    print_message("GOT READ PIPE");
+        .open(read_path)?;
 
-    //collect pipe for writing
-    print_message("GETTING WRITE PIPE");
-    let filewrite = OpenOptions::new()
+    let _write_pipe = OpenOptions::new()
         .write(true)
-        .open(pathwrite)
-        .expect("file not found");
-    print_message("GOT WRITE PIPE");
+        .open(write_path)?;
 
-    let mut communication = COMMUNICATION.lock().unwrap();
-    communication.readpipe = Some(fileread);
-    communication.writepipe = Some(filewrite);
-
+    let communication = Pipes { read_pipe, _write_pipe };
+    PIPES.get_or_init(|| communication);
     Ok(())
 }
 
-// save reference to python
+// Saves a reference to the Python object, used as a callback.
 #[pyfunction]
 fn register_communicationmanager(objectpython: PyObject) -> PyResult<()> {
-    COMMUNICATIONMANAGER.get_or_init(|| objectpython);
+    DASHBOARD.get_or_init(|| objectpython);
     Ok(())
 }
 
-// start reading information from RM related to flows from other containers
+// Receives traffic metadata from other services.
 #[pyfunction]
 fn start_polling_u16() -> PyResult<()> {
-    let _handle = thread::spawn(move || {
-        let communication = COMMUNICATION.lock().unwrap();
-        let mut buf_reader = BufReader::new(communication.readpipe.as_ref().unwrap());
+    thread::spawn(move || {
+        let pipes = PIPES.get().unwrap();
+        let mut buf_reader = BufReader::new(&pipes.read_pipe);
 
         loop {
             let message_reader = serialize_packed::read_message(
@@ -165,26 +119,16 @@ fn start_polling_u16() -> PyResult<()> {
     Ok(())
 }
 
-// call python to give information about flows from other containers
+// Sends metadata to the Dashboard using the reference to the Python object.
 fn callreceive_flow_16(bandwidth: u32, link_count: u16, ids: Vec<u16>) {
     Python::with_gil(|py| {
-        let commsmanager = COMMUNICATIONMANAGER
+        let dashboard_py = DASHBOARD
             .get()
-            .expect("communicationcore: communicationmanager must have been initialized");
+            .expect("Dashboard (communicationcore): python object must have been initialized.");
 
-        commsmanager
+        dashboard_py
             .call_method(py, "receive_flow", (bandwidth, link_count, ids), None)
-            .map_err(|err| println!("communicationcore: {:?}", err))
+            .map_err(|err| eprintln!("Dashboard (communicationcore): {:?}", err))
             .ok();
     });
-}
-
-fn print_message(message_to_print: &str) {
-    let container_name = CONTAINERNAME.get_or_init(|| "containername not initialized".to_string());
-    let message = format!(
-        "communicationcore - {} : {}",
-        container_name, message_to_print
-    );
-
-    println!("{}", message);
 }
