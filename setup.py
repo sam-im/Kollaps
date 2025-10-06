@@ -7,14 +7,6 @@ setup(
     url='https://github.com/miguelammatos/Kollaps.git',
     author='Joao Neves, Paulo Gouveia, Luca Liechti',
     packages=find_packages(include=['kollaps', 'kollaps.*']),
-#    packages=[
-#        'kollaps',
-#        'kollaps.dashboard',
-#        'kollaps.tools',
-#        'kollaps.tools.bootstrapping',
-#        'kollaps.tools.deploymentGenerators',
-#        'kollaps.tools.ThunderStorm'
-#    ],
     install_requires=[
         'dnspython',
         'docker',
@@ -36,7 +28,7 @@ setup(
         'console_scripts': [
             'KollapsDeploymentGenerator=kollaps.tools.deploymentGenerators.deploymentGenerator:main',
             'KollapsDashboard=kollaps.dashboard.Dashboard:main',
-            'Kollapsbootstrapper=kollaps.tools.bootstrapping.Bootstrapper:main',
+            'Kollapsbootstrapper=kollaps.bootstrapper.main:main',
             'ThunderstormTranslator=kollaps.tools.Thunderstorm.ThunderstormTranslator:main'
         ],
     },

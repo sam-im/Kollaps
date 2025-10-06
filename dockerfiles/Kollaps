@@ -49,4 +49,4 @@ RUN /opt/venv/bin/pip wheel --no-deps -w /Kollaps /Kollaps && \
 RUN /opt/venv/bin/pip uninstall -y setuptools wheel pip && \
     rm -rf /Kollaps
 
-ENTRYPOINT ["/usr/bin/pid1", "/opt/venv/bin/python3", "-m", "kollaps.tools.bootstrapping.Bootstrapper"]
+ENTRYPOINT ["/usr/bin/pid1", "/opt/venv/bin/python3", "-m", "kollaps.bootstrapper.main"]

@@ -24,9 +24,9 @@ import sys
 from subprocess import Popen
 from time import sleep
 
+from .bootstrapper import Bootstrapper
 from kollaps.tools.NetGraph import NetGraph
 from kollaps.tools.XMLGraphParser import XMLGraphParser
-from kollaps.tools.bootstrapping.Bootstrapper import Bootstrapper
 from kollaps.tools.utils import print_error, print_named, print_error_named
 from kollaps.tools.utils import DOCKER_SOCK, TOPOLOGY
 
@@ -59,23 +59,6 @@ class KubernetesBootstrapper(Bootstrapper):
             print_error_named("god", "! failed to bootstrap dashboard.")
             sys.stdout.flush()
             
-            
-    def bootstrap_logger(self, pod, container_id):
-        try:
-            container_id = pod.status.container_statuses[0].container_id[9:]
-            container_pid = self.low_level_client.inspect_container(container_id)["State"]["Pid"]
-        
-            cmd = ["nsenter", "-t", str(container_pid), "-n", "/usr/bin/python3", "/usr/bin/KollapsLogger", TOPOLOGY]
-            logger_instance = Popen(cmd)
-        
-            self.instance_count += 1
-            print_named("god", "Done bootstrapping logger.")
-            self.already_bootstrapped[container_id] = logger_instance
-    
-        except:
-            print_error_named("god", "! failed to bootstrap dashboard.")
-            sys.stdout.flush()
-    
     
     def bootstrap_app_container(self, pod, container_id):
         try:
@@ -154,10 +137,6 @@ class KubernetesBootstrapper(Bootstrapper):
                             # inject the Dashboard into the dashboard container
                             if "dashboard" in pod.metadata.name:
                                 self.bootstrap_dashboard(pod, container_id)
-                            
-                            # inject the Logger into the logger container
-                            elif "logger" in pod.metadata.name:
-                                self.bootstrap_logger(pod, container_id)
                             
                             # if not a supervisor container, inject emucore into application containers
                             elif label in pod.metadata.labels:

@@ -17,8 +17,6 @@
 #
 import socket
 import random
-import os
-import sys
 
 from os import getenv
 from subprocess import Popen
@@ -201,48 +199,3 @@ class Bootstrapper(object):
         msg += "Please verify that the code is calling one of the appropriate orchestrator bootstrappers."
         print_error_named("Bootstrapper", msg)
 
-
-def main():
-    # Initially the main() funciton was in a seperate file in the root of the src files
-    # I merged it with the Bootstrapper.py, this resulted in a "circular import error"
-    # to fix it, I moved the imports that causes it inside the main function
-    from kollaps.tools.bootstrapping.SwarmBootstrapper import SwarmBootstrapper
-    from kollaps.tools.bootstrapping.KubernetesBootstrapper import KubernetesBootstrapper
-
-    try:
-        if len(sys.argv) < 3:
-            msg = "If you are calling " + sys.argv[0] + " from your workstation stop."
-            msg += "This should only be used inside containers."
-
-            sleep(20)
-
-            print_and_fail(msg)
-
-        mode = sys.argv[1]
-        label = sys.argv[2]
-        bootstrapper_id = sys.argv[3] if len(sys.argv) > 3 else None
-
-        bootstrapper = None
-        orchestrator = os.getenv('KOLLAPS_ORCHESTRATOR', 'swarm')
-
-        if orchestrator == 'kubernetes':
-            bootstrapper = KubernetesBootstrapper()
-
-        elif orchestrator == 'swarm':
-            bootstrapper = SwarmBootstrapper()
-
-        # insert here any other bootstrappping class required by new orchestrators
-        else:
-            print_named("bootstrapper", "Unrecognized orchestrator. Using default: Docker Swarm.")
-            bootstrapper = SwarmBootstrapper()
-
-        bootstrapper.bootstrap(mode, label, bootstrapper_id)
-
-    except Exception as e:
-        sys.stdout.flush()
-        print_error(e)
-        sleep(20)
-
-
-if __name__ == '__main__':
-    main()
