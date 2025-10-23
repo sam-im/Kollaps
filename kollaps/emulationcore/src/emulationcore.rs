@@ -31,7 +31,7 @@ pub struct EmulationCore {
     orchestrator: Option<Orchestrator>,
     cm_file: String,
     topology_file: String,
-    networkdevice: String,
+    networkdevice: Option<String>,
     shutdown: Arc<Mutex<bool>>,
     start: Arc<Mutex<bool>>,
     scheduler: Arc<Mutex<EventScheduler>>,
@@ -50,6 +50,7 @@ impl EmulationCore {
         )));
         let communication = Communication::new(id.clone());
 
+        // TODO consider replacing `"".to_string()` fields with Option::None instead
         Self {
             id: id,
             ip: 0,
@@ -64,7 +65,7 @@ impl EmulationCore {
             orchestrator,
             cm_file: "".to_string(),
             topology_file: "".to_string(),
-            networkdevice: "".to_string(),
+            networkdevice: None,
             shutdown: Arc::new(Mutex::new(false)),
             scheduler: eventscheduler,
             start: Arc::new(Mutex::new(false)),
@@ -82,7 +83,7 @@ impl EmulationCore {
     }
 
     pub fn set_network_device(&mut self, networkdevice: String) {
-        self.networkdevice = networkdevice;
+        self.networkdevice = Some(networkdevice);
     }
 
     pub async fn init_baremetal(&mut self) {
@@ -99,7 +100,7 @@ impl EmulationCore {
         self.pool_period = config.pool_period;
         self.max_age = config.max_age;
 
-        let self_addr = get_own_ip(Some(self.networkdevice.clone()));
+        let self_addr = get_own_ip(self.networkdevice.clone());
         initial_graph
             .set_graph_root(self_addr)
             .await
@@ -224,7 +225,7 @@ impl EmulationCore {
             let _ = o.resolve_hostnames(&mut initial_graph).await;
         }
 
-        let self_addr = get_own_ip(None);
+        let self_addr = get_own_ip(self.networkdevice.clone());
         initial_graph
             .set_graph_root(self_addr)
             .await
@@ -369,8 +370,12 @@ impl EmulationCore {
     }
 
     pub async fn setup_ebpf(&mut self) {
+        let iface = match self.networkdevice.clone() {
+            Some(s) => s,
+            None => "eth0".to_string(),
+        };
         let usages = self.usages.clone();
-        tokio::spawn(async move { get_local_usage(usages).await });
+        tokio::spawn(async move { get_local_usage(&iface, usages).await });
     }
 
     pub async fn emulation_loop(&mut self) {
@@ -467,9 +472,7 @@ impl EmulationCore {
 
 /// Inserts received message data from monitor's eBPF PerfEventMap into
 /// `usages` hashmap.
-async fn get_local_usage(usages_handle: Arc<Mutex<HashMap<u32, u32>>>) {
-    // TODO set to EmulationCore's networkdevice field for baremetal
-    let iface = "eth0";
+async fn get_local_usage(iface: &str, usages_handle: Arc<Mutex<HashMap<u32, u32>>>) {
     let mut ebpf_handle = monitor::run(iface).await.unwrap();
 
     while let Some(msg) = ebpf_handle.rx.recv().await {
