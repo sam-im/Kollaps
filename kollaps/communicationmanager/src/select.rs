@@ -43,7 +43,7 @@ pub struct Select {
 impl Select {
     pub fn new(fds: Vec<i32>) -> Self {
         // The `nfds` argument of libc::select is set to the largest file descriptor plus one.
-        let nfds = fds.iter().max().unwrap() + 1;
+        let nfds = fds.iter().max().unwrap_or(&0) + 1;
 
         let mut fd_set = FdSet::new();
         fds.iter().for_each(|fd| fd_set.set(*fd));
