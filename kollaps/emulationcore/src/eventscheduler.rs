@@ -19,7 +19,7 @@ use crate::state::State;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant, sleep_until};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// Represents a dynamic event as parsed from a topology file.
 pub struct Event {
@@ -108,7 +108,7 @@ impl EventScheduler {
                         // `None` currently means baremetal deployment
                         None => {
                             if self.script.is_empty() {
-                                error!("EC {}: script is empty", self.name);
+                                debug!("EC {}: script is empty", self.name);
                             } else {
                                 info!(
                                     "EC {}: started experiment with script {}",
