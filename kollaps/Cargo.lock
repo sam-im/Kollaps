@@ -1307,6 +1307,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kollaps-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "emulationcore",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kube"
 version = "0.69.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -9,6 +9,7 @@ members = [
     "monitor-ebpf",
     "emulationcore",
     "controller",
+    "kollaps-wasm",
 ]
 
 # do not add monitor-ebpf to default-members or it won't compile
@@ -19,7 +20,8 @@ default-members = [
     "communicationmanager",
     "capnp-schemas",
     "emulationcore",
-    "controller"
+    "controller",
+    "kollaps-wasm",
 ]
 
 # included by aya-rs project template
