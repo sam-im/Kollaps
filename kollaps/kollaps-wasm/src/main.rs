@@ -1,9 +1,9 @@
-mod service;
-mod runtime;
 mod network;
+mod runtime;
+mod service;
 
-use std::fs::read_to_string;
 use std::env::args;
+use std::fs::read_to_string;
 
 use emulationcore::xmlgraphparser::XMLGraphParser;
 
@@ -23,11 +23,10 @@ fn main() -> Result<()> {
         .finish();
     subscriber::set_global_default(subscriber)?;
 
-    let topology_path = args().nth(1).unwrap();
+    let topology_path = args().nth(1).expect("missing argument: topology path");
 
     let topology = read_to_string(topology_path)?;
     let parser = XMLGraphParser::try_new(&topology, "container".to_string())?;
-
     let _ = {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

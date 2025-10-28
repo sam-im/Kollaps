@@ -3,7 +3,7 @@ use crate::network::Namespace;
 pub struct Service<'a> {
     id: String,
     path: String,
-    namespace: &'a Namespace
+    namespace: &'a Namespace,
 }
 
 impl<'a> Service<'a> {
@@ -14,7 +14,7 @@ impl<'a> Service<'a> {
         Self {
             id,
             path,
-            namespace
+            namespace,
         }
     }
 }
