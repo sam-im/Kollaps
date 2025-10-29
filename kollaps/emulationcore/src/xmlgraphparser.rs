@@ -227,9 +227,11 @@ impl<'a> XMLGraphParser<'a> {
             for _i in 0..replicas {
                 if self.mode == "container" {
                     let name = service.attribute("name").unwrap().to_string();
+                    let image = service.attribute("image").map(|i| i.to_string());
+                    let command = service.attribute("command").map(|s| s.to_string());
 
                     graph
-                        .insert_service(name, shared, reuse, replicas, None, paths.clone(), None)
+                        .insert_service(name, shared, reuse, replicas, None, paths.clone(), None, image, command)
                         .await;
                 }
 
@@ -254,6 +256,8 @@ impl<'a> XMLGraphParser<'a> {
                                         Some(convert_to_int(ipv4.octets())),
                                         paths.clone(),
                                         script,
+                                        None,
+                                        None,
                                     )
                                     .await;
                             }

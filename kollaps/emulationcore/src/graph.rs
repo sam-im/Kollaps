@@ -100,8 +100,10 @@ impl Graph {
         ip: Option<u32>,
         paths: Vec<String>,
         script: Option<&str>,
+        image: Option<String>,
+        command: Option<String>,
     ) {
-        let mut service = Service::new(hostname.clone(), shared, reuse, replicas);
+        let mut service = Service::new(hostname.clone(), shared, reuse, replicas, image, command);
 
         if !script.is_none() {
             service.script = script.unwrap().to_string();
@@ -129,7 +131,7 @@ impl Graph {
     }
 
     pub fn insert_bridge(&mut self, hostname: String, ip: Option<u32>) {
-        let mut bridge = Service::new(hostname.clone(), false, false, 0);
+        let mut bridge = Service::new(hostname.clone(), false, false, 0, None, None);
 
         if ip.is_none() {
             //generate random IP to put be able to put bridges in the map

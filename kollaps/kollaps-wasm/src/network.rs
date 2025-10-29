@@ -14,7 +14,7 @@ impl Bridge {
     /// Creates a new virtual bridge struct.
     /// To create the bridge itself on linux, call `create` on this struct.
     /// To remove it, call `cleanup`.
-    /// 
+    ///
     /// Arguments:
     /// - name: identifier to refer to this bridge when using linux `ip`.
     /// - addr: first address of the subnet.
@@ -22,7 +22,7 @@ impl Bridge {
     fn new(name: String, addr: Ipv4Addr, subnet: u8) -> Self {
         let subnet = match subnet {
             0 => 0,
-            n => u32::MAX << (32 - n)
+            n => u32::MAX << (32 - n),
         };
         let namespaces = Vec::new();
 
@@ -92,7 +92,7 @@ impl Bridge {
 }
 
 pub struct Namespace {
-    name: String,
+    pub name: String,
     veth: String,
     veth_peer: String,
     pub addr: Ipv4Addr,

@@ -34,10 +34,12 @@ pub struct Service {
     pub replica_id: usize,
     pub activepaths: Vec<String>,
     pub script: String,
+    pub image: Option<String>,
+    pub command: Option<String>,
 }
 
 impl Service {
-    pub fn new(hostname: String, shared: bool, reuse: bool, replicas: u32) -> Service {
+    pub fn new(hostname: String, shared: bool, reuse: bool, replicas: u32, image: Option<String>, command: Option<String>) -> Service {
         Service {
             ip: 0,
             last_bytes: 0,
@@ -51,6 +53,8 @@ impl Service {
             replica_id: 0,
             activepaths: vec![],
             script: "".to_string(),
+            image,
+            command,
         }
     }
 

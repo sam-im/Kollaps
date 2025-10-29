@@ -1,20 +1,38 @@
 use crate::network::Namespace;
 
-pub struct Service<'a> {
-    id: String,
-    path: String,
-    namespace: &'a Namespace,
+#[derive(Debug)]
+pub struct Service {
+    name: String,
+    image: String,
+    command: Option<String>,
 }
 
-impl<'a> Service<'a> {
-    // consider try_new with file path and runtime check
-    pub fn new(path: String, namespace: &'a Namespace) -> Self {
-        let addr = namespace.addr.to_string().replace(".", "-");
-        let id = format!("kollaps-wasm-{}", addr);
+impl Service {
+    pub fn new(name: String, image: String, command: Option<String>) -> Self {
+        Self {
+            name,
+            image,
+            command,
+        }
+    }
+}
+
+struct ActiveService {
+    id: String,
+    ns_name: String,
+    service: Service,
+}
+
+impl ActiveService {
+    fn new(service: Service, ns: &Namespace) -> Self {
+        // Encoding address into the ID.
+        let addr = ns.addr.to_string().replace(".", "-");
+        let id = format!("kollaps_wasm_{}", addr);
+        let ns_name = ns.name.clone();
         Self {
             id,
-            path,
-            namespace,
+            ns_name,
+            service,
         }
     }
 }
