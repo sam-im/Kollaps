@@ -3,6 +3,8 @@ use std::{net::Ipv4Addr, process::Command};
 use anyhow::{Context, Result};
 use tracing::error;
 
+// TODO: implement Drop trait
+
 pub struct Bridge {
     name: String,
     addr: Ipv4Addr,
@@ -19,7 +21,8 @@ impl Bridge {
     /// - name: identifier to refer to this bridge when using linux `ip`.
     /// - addr: first address of the subnet.
     /// - subnet: number of bits for host addressing in CIDR notation.
-    fn new(name: String, addr: Ipv4Addr, subnet: u8) -> Self {
+    pub fn new(name: &str, addr: Ipv4Addr, subnet: u8) -> Self {
+        let name = name.to_string();
         let subnet = match subnet {
             0 => 0,
             n => u32::MAX << (32 - n),
@@ -34,7 +37,11 @@ impl Bridge {
         }
     }
 
-    fn create(&self) -> Result<()> {
+    pub fn get_ns(&self, name: &str) -> Option<&Namespace> {
+        self.namespaces.iter().find(|ns| ns.name == name)
+    }
+
+    pub fn create(&self) -> Result<()> {
         //ip link add name <name> type bridge
         run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"])?;
 
@@ -61,7 +68,7 @@ impl Bridge {
         Ok(())
     }
 
-    fn create_namespace(&mut self) -> Result<String> {
+    pub fn create_namespace(&mut self) -> Result<Namespace> {
         let ns_count = self.namespaces.len();
 
         let name = format!("k_ns_{}", ns_count);
@@ -81,19 +88,19 @@ impl Bridge {
         let tmp2 = (addr.to_bits() + 1) & self.subnet;
         if tmp1 != tmp2 {
             // TODO: return an error type
-            error!("Subnet is full.")
+            error!("Subnet was full.");
         }
 
         let ns = Namespace::new(name.clone(), veth, addr);
-        self.namespaces.push(ns);
-
-        Ok(name)
+        self.namespaces.push(ns.clone());
+        Ok(ns)
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Namespace {
     pub name: String,
-    veth: String,
+    pub veth: String,
     veth_peer: String,
     pub addr: Ipv4Addr,
 }
@@ -179,12 +186,13 @@ impl Namespace {
 
 /// Helper function that runs the `ip` command on linux.
 pub fn run_ip_cmd(args: &[&str]) -> Result<()> {
-    let out = Command::new("ip")
-        .args(args)
-        .output()
-        .context(format!("Failed to execute ip with args: {:?}", args))?;
+    let out = Command::new("ip").args(args).output().context(format!(
+        "Failed to execute ip command with args: {:?}",
+        args
+    ))?;
 
     if !out.status.success() {
+        error!("ip command returned a non-zero exit code for args: {:?}", args);
         todo!(); // TODO: handle failure
     }
     Ok(())

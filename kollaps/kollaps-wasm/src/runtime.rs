@@ -1,7 +1,5 @@
 use anyhow::Result;
 
-use crate::network::run_ip_cmd;
-
 enum Runtime {
     Wasmtime,
     Wasmer,
@@ -29,6 +27,7 @@ impl Runtime {
 //
 // impl Runtime {
 //     fn create(&self, ns: &str, wasm: &str) -> Result<()> {
+//         use crate::network::run_ip_cmd;
 //         // ip netns exec ns-wasm1 wasmtime ./module.wasm
 //         run_ip_cmd(&["netns", "exec", ns, self.cmd.as_str(), wasm])?;
 //         // ip netns exec ns-wasm1 ./emulationcore (don't implement this here)
