@@ -28,7 +28,10 @@ use crate::emulationcore::EmulationCore;
 
 use std::env;
 
-use orchestrator::{Orchestrator, docker::DockerOrchestrator, kubernetes::KubernetesOrchestrator};
+use orchestrator::{
+    Orchestrator, docker::DockerOrchestrator, kubernetes::KubernetesOrchestrator,
+    wasm::WasmOrchestrator,
+};
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
@@ -43,41 +46,45 @@ fn main() {
         .build()
         .unwrap();
 
-    if env::args().len() == 4 {
+    // TODO: proper argument parsing
+    // TODO: optional argument to set the kollaps tmp dir (then update resolve_hostnames of wasm)
+    if !(env::args().nth(4) == Some("baremetal".to_string())) {
         let id = env::args().nth(1).unwrap();
         let pid = env::args().nth(2).unwrap().parse::<u32>().unwrap();
         let orchestrator = env::args().nth(3).unwrap();
+        // optional interface name, defaults to "eth0"
+        let ifname = env::args().nth(4);
 
-        rt.block_on(container_deployment(id, pid, orchestrator));
+        rt.block_on(container_deployment(id, pid, orchestrator, ifname));
     } else {
         let topology_file = env::args().nth(1).unwrap();
         let cm_file = env::args().nth(2).unwrap();
-        let networkdevice = env::args().nth(3).unwrap();
+        let ifname = env::args().nth(3);
 
-        rt.block_on(baremetal_deployment(topology_file, cm_file, networkdevice));
+        rt.block_on(baremetal_deployment(topology_file, cm_file, ifname));
     }
 }
 
-async fn container_deployment(id: String, pid: u32, orchestrator: String) {
+async fn container_deployment(id: String, pid: u32, orchestrator: String, ifname: Option<String>) {
     info!("EC {}: starting", id);
     let orchestrator = match orchestrator.as_str() {
         "docker" => Orchestrator::Docker(DockerOrchestrator),
         "kubernetes" => Orchestrator::Kubernetes(KubernetesOrchestrator),
+        "wasm" => Orchestrator::Wasm(WasmOrchestrator),
         _ => unimplemented!("unkown argument: {}", orchestrator),
     };
-    let mut ec = EmulationCore::new(id.clone(), pid, Some(orchestrator));
+    let mut ec = EmulationCore::new(id.clone(), pid, Some(orchestrator), ifname);
     ec.init().await;
     ec.emulation_loop().await;
     info!("EC {}: stopped", id);
 }
 
-async fn baremetal_deployment(topology_file: String, cm_file: String, ifname: String) {
+async fn baremetal_deployment(topology_file: String, cm_file: String, ifname: Option<String>) {
     info!("EC: starting");
 
-    let mut ec = EmulationCore::new("".to_string(), 0, None);
+    let mut ec = EmulationCore::new("".to_string(), 0, None, ifname);
     ec.set_topology_file(topology_file);
     ec.set_cm_file(cm_file);
-    ec.set_network_device(ifname);
 
     ec.init_baremetal().await;
     ec.emulation_loop().await;

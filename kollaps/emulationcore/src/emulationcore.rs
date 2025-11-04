@@ -41,7 +41,12 @@ pub struct EmulationCore {
 }
 
 impl EmulationCore {
-    pub fn new(id: String, pid: u32, orchestrator: Option<Orchestrator>) -> Self {
+    pub fn new(
+        id: String,
+        pid: u32,
+        orchestrator: Option<Orchestrator>,
+        networkdevice: Option<String>,
+    ) -> Self {
         let state = Arc::new(Mutex::new(State::new(id.clone())));
         let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(
             state.clone(),
@@ -65,7 +70,7 @@ impl EmulationCore {
             orchestrator,
             cm_file: "".to_string(),
             topology_file: "".to_string(),
-            networkdevice: None,
+            networkdevice: networkdevice,
             shutdown: Arc::new(Mutex::new(false)),
             scheduler: eventscheduler,
             start: Arc::new(Mutex::new(false)),

@@ -39,7 +39,14 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn new(hostname: String, shared: bool, reuse: bool, replicas: u32, image: Option<String>, command: Option<String>) -> Service {
+    pub fn new(
+        hostname: String,
+        shared: bool,
+        reuse: bool,
+        replicas: u32,
+        image: Option<String>,
+        command: Option<String>,
+    ) -> Service {
         Service {
             ip: 0,
             last_bytes: 0,

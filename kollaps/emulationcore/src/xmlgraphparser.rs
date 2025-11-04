@@ -231,7 +231,17 @@ impl<'a> XMLGraphParser<'a> {
                     let command = service.attribute("command").map(|s| s.to_string());
 
                     graph
-                        .insert_service(name, shared, reuse, replicas, None, paths.clone(), None, image, command)
+                        .insert_service(
+                            name,
+                            shared,
+                            reuse,
+                            replicas,
+                            None,
+                            paths.clone(),
+                            None,
+                            image,
+                            command,
+                        )
                         .await;
                 }
 
