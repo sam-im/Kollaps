@@ -4,19 +4,20 @@ mod runtime;
 mod service;
 
 use crate::config::Config;
-use crate::service::Service;
+use crate::service::parse_services;
 
-use emulationcore::xmlgraphparser::XMLGraphParser;
+use libc::{SIGSTOP, execlp, raise};
 use network::Bridge;
 use service::{ActiveService, ReadyService};
 
-use std::fs::{self, read_to_string};
+use std::ffi::CString;
+use std::fs;
 use std::net::Ipv4Addr;
 use std::process::{Child, Command};
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
-use tracing::{Level, debug, info, subscriber};
+use anyhow::Result;
+use tracing::{Level, debug, error, info, subscriber};
 use tracing_subscriber::FmtSubscriber;
 
 fn main() -> Result<()> {
@@ -25,39 +26,12 @@ fn main() -> Result<()> {
         .finish();
     subscriber::set_global_default(subscriber)?;
 
+    // TODO: consider setting `setpgid` and sending sigkill to all childs as cleanup (check pid1.c)
+
     // TODO: Parse arguments
     let config = Config::default();
 
-    info!("Parsing topology file.");
-    let topology =
-        read_to_string(&config.topoinfo_path).context("Failed to read the topology file.")?;
-    let parser = XMLGraphParser::try_new(&topology, "container".to_string())
-        .context("Failed to parse the topology file.")?;
-
-    info!("Extracting services.");
-    let services = {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let (_config, graph) = rt.block_on(parser.fill_graph());
-
-        graph
-            .services_by_name
-            .into_iter()
-            .flat_map(|(name, vec)| {
-                let name = name.to_ascii_lowercase();
-                vec.iter()
-                    .map(|e| {
-                        let s = e.blocking_lock();
-                        let image = s.image.clone().unwrap();
-                        let command = s.command.clone();
-                        Service::new(name.clone(), image, command)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<Service>>()
-    };
-    debug!("Services = {:?}", services);
+    let services = parse_services(&config)?;
 
     info!("Creating virtual bridge and namespaces.");
     let mut bridge = Bridge::new("k_wasm", Ipv4Addr::from_str(&config.addr)?, 24);
@@ -70,16 +44,110 @@ fn main() -> Result<()> {
         .map(|s| s.expect("Failed to create network namespaces for services."))
         .collect::<Vec<ReadyService>>();
 
+    setup_tempdir(&config, &services)?;
+
+    info!("Starting communicationmanager.");
+    let _commanager = Command::new("communicationmanager")
+        .arg(services.len().to_string())
+        .spawn()?;
+
+    info!("Starting services.");
+    let services: Vec<ActiveService> = services
+        .iter()
+        .filter(|s| s.service.name != "dashboard") // consider also starting the dashboard
+        .map(|s| {
+            let program = s.service.image.clone();
+            let args = match &s.service.command {
+                Some(args) => args.split_ascii_whitespace().fold(vec![], |mut acc, a| {
+                    let candidates = services
+                        .iter()
+                        .filter(|s| s.service.name.starts_with(&format!("${}", a)))
+                        .collect::<Vec<&ReadyService>>();
+                    if candidates.is_empty() {
+                        acc.push(a.to_string());
+                    } else {
+                        let tmp: Vec<&str> = a
+                            .split(&format!("${}", candidates[0].service.name))
+                            .collect();
+                        if let Some(str) = tmp.get(1) {
+                            if let Ok(i) = usize::from_str(str) {
+                                let c = candidates.get(i).unwrap_or(&candidates[0]);
+                                acc.push(c.ns.addr.to_string());
+                            }
+                        }
+                    }
+                    acc
+                }),
+                None => vec![],
+            };
+
+            // Using `libc::fork` we can create a child for each service that raises SIGSTOP immediately.
+            // This way we can defer the starting of runtimes to emulationcore and still have each runtime's PID.
+            let pid;
+            let program = CString::new(program).unwrap();
+            let args = CString::new(args.join(" ")).unwrap();
+
+            unsafe {
+                pid = libc::fork();
+                match pid {
+                    0 => {
+                        debug!("Child for {} raising SIGSTOP.", s.id);
+                        raise(SIGSTOP);
+
+                        debug!("Child for service {} received SIGCONT.", s.id);
+                        let res = execlp(program.as_ptr(), args.as_ptr());
+
+                        error!(
+                            "Child for service {} failed to run {} with error code {}",
+                            s.id, config.runtime_name, res
+                        );
+                        // Exit without executing RAII guards in child.
+                        std::process::exit(-1);
+                    }
+                    pid if pid < 0 => {
+                        panic!("Failed to fork runtime handler, error code: {}", pid);
+                    }
+                    pid => {
+                        info!("Forked a runtime handler, pid: {}.", pid);
+                    }
+                }
+            }
+            ActiveService::new(pid, s.clone())
+        })
+        .collect();
+
+    info!("Starting emulationcore instances.");
+    let _ecores: Vec<Child> = services
+        .iter()
+        .filter(|s| s.name() != "dashboard")
+        .map(|s| {
+            Command::new("emulationcore")
+                .arg(s.id())
+                .arg(s.pid().to_string())
+                .arg("wasm")
+                .arg(s.veth())
+                .spawn()
+                .expect("Failed to start an emulationcore instance.")
+        })
+        .collect();
+
+    // TODO: poll the status emulationcores and clean up (send kill to all processes)
+
+    info!("Exiting.");
+    Ok(())
+}
+
+fn setup_tempdir(config: &Config, services: &Vec<ReadyService>) -> Result<()> {
     info!("Setting up temporary directory.");
     let mut topoinfo = String::new();
     let mut topoinfodashboard = String::new();
     services.iter().for_each(|s| {
         if s.service.name == "dashboard" {
             topoinfodashboard.push_str(&s.id);
-            topoinfodashboard.push_str("\n");
+            topoinfodashboard.push('\n');
         } else {
             topoinfo.push_str(&s.id);
-            topoinfo.push_str("\n");
+            topoinfo.push('\n');
         }
     });
 
@@ -94,58 +162,5 @@ fn main() -> Result<()> {
         format!("{}{}", &config.tmp_dir, &config.topoinfodashboard_path),
         topoinfodashboard,
     )?;
-
-    info!("Starting Communication Manager.");
-    let _commanager = Command::new("communicationmanager")
-        .arg(services.len().to_string())
-        .spawn()?;
-
-    info!("Starting service runtimes.");
-    let service_names = services.iter().map(|s| s.service.name.clone()).collect::<Vec<String>>();
-    let services: Vec<ActiveService> = services
-        .into_iter()
-        .filter(|s| s.service.name != "dashboard") // TODO: check how bootstrapper bootstraps dashboard
-        .map(|s| {
-            // Replace each service name by its address.
-            let mut service_args: Vec<String> = Vec::new();
-            if let Some(args_str) = &s.service.command {
-                args_str
-                    .split_ascii_whitespace()
-                    .for_each(|a| {
-                        if let Some(addr) = service_names.iter().find(|n| *n == a) {
-                            service_args.push(addr.to_string());
-                        } else {
-                            service_args.push(a.to_string());
-                        }
-                    });
-            }
-            // TODO: fork and raise sigstop, after sigcont run the runtime
-            let handle = Command::new(&config.runtime_name)
-                .arg(format!("{}{}.wasm", &config.wasm_dir, &s.service.image))
-                .args(&service_args)
-                .spawn()
-                .expect(&format!("Failed to start {} runtime", &config.runtime_name));
-            ActiveService::new(handle, s)
-        })
-        .collect();
-
-    info!("Starting Emulation Core instances...");
-    let _ecores: Vec<Child> = services
-        .iter()
-        .filter(|s| s.name() != "dashboard")
-        .map(|s| {
-            Command::new("emulationcore")
-                .arg(s.id())
-                .arg(s.pid().to_string())
-                .arg("wasm")
-                .arg(s.veth())
-                .spawn()
-                .expect("Failed to start emulationcore instance.")
-        })
-        .collect();
-
-    // TODO: wait for runtimes to exit and clean up
-
-    info!("Exiting.");
     Ok(())
 }

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 emulationcore = { path = "../emulationcore" }
+libc = "0.2.177"
 tokio = { version = "1.46.1", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"

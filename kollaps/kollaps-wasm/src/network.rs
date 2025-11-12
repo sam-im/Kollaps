@@ -1,9 +1,7 @@
 use std::{net::Ipv4Addr, process::Command};
 
 use anyhow::{Context, Result};
-use tracing::error;
-
-// TODO: implement Drop trait
+use tracing::{error, info};
 
 pub struct Bridge {
     name: String,
@@ -55,17 +53,14 @@ impl Bridge {
         Ok(())
     }
 
-    fn cleanup(&self) -> Result<()> {
+    fn cleanup(&self) {
         self.namespaces.iter().for_each(|ns| {
-            let _ = ns.cleanup();
+            ns.cleanup();
         });
-
         // ip link set <name> down
         let _ = run_ip_cmd(&["link", "set", self.name.as_str(), "down"]);
         // ip link del <name>
         let _ = run_ip_cmd(&["link", "del", self.name.as_str()]);
-
-        Ok(())
     }
 
     pub fn create_namespace(&mut self) -> Result<Namespace> {
@@ -94,6 +89,13 @@ impl Bridge {
         let ns = Namespace::new(name.clone(), veth, addr);
         self.namespaces.push(ns.clone());
         Ok(ns)
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        info!("Cleaning up the bridge and namespaces.");
+        self.cleanup();
     }
 }
 
@@ -149,7 +151,7 @@ impl Namespace {
             "ip",
             "addr",
             "add",
-            &format!("{}/{}", self.addr.to_string(), subnet),
+            &format!("{}/{}", self.addr, subnet),
             "dev",
             self.veth.as_str(),
         ])?;
@@ -177,10 +179,9 @@ impl Namespace {
         ])?;
         Ok(())
     }
-    fn cleanup(&self) -> Result<()> {
+    fn cleanup(&self) {
         // ip netns del <name>
-        run_ip_cmd(&["netns", "del", self.name.as_str()])?;
-        Ok(())
+        let _ = run_ip_cmd(&["netns", "del", self.name.as_str()]);
     }
 }
 
@@ -192,8 +193,14 @@ pub fn run_ip_cmd(args: &[&str]) -> Result<()> {
     ))?;
 
     if !out.status.success() {
-        error!("ip command returned a non-zero exit code for args: {:?}", args);
-        todo!(); // TODO: handle failure
+        let err_msg = match String::from_utf8(out.stdout) {
+            Ok(output) => format!("ip command failed for args {:?} with:\n {}", args, output),
+            Err(_) => format!("ip command failed for args {:?}", args),
+        };
+        error!("{}", err_msg);
+        // TODO: check the way you handled errors in usage before returning an error
+        // and potentially causing panics.
+        // return Err(anyhow::Error::msg(err_msg));
     }
     Ok(())
 }

@@ -1,3 +1,5 @@
+use tracing::error;
+
 use super::SignalCode;
 use crate::{emulationcore::Result, graph::Graph};
 
@@ -14,7 +16,9 @@ impl WasmOrchestrator {
     /// Retrieve the address of each service by parsing it from their `id`.
     pub fn resolve_hostnames(&self, graph: &mut Graph) -> Result<()> {
         let parse_name = |id: &str| -> Option<String> {
-            id.split('_').nth_back(1).map_or(None, |s| Some(s.to_string()))
+            id.split('_')
+                .nth_back(1)
+                .map_or(None, |s| Some(s.to_string()))
         };
         let parse_addr = |id: &str| -> Option<Ipv4Addr> {
             if let Some(addr) = id.split('_').last() {
@@ -29,7 +33,7 @@ impl WasmOrchestrator {
         service_ids.push_str(&dashboard_id);
 
         let service_ids = service_ids.split(|c| c == '\n').collect::<Vec<&str>>();
-        let name_addr_pair: Vec<(String, Ipv4Addr)> = service_ids
+        let name_addr_pairs: Vec<(String, Ipv4Addr)> = service_ids
             .iter()
             .filter_map(|id| match id.is_empty() {
                 true => None,
@@ -43,26 +47,35 @@ impl WasmOrchestrator {
             .collect();
 
         for (name, services) in &graph.services_by_name {
-            let addrs = &name_addr_pair
+            let addrs = &name_addr_pairs
                 .iter()
                 .filter(|(n, _)| n == name)
                 .map(|(_, a)| a.clone())
                 .collect::<Vec<Ipv4Addr>>();
 
             assert_eq!(addrs.len(), services.len());
-            services.iter().zip(addrs).enumerate().for_each(|(i, (serv, addr))| {
-                let addr_u32 = u32::from_be_bytes(addr.octets());
-                serv.blocking_lock().ip = addr_u32;
-                serv.blocking_lock().replica_id = i;
-                graph.services.insert(addr_u32, serv.clone());
-                graph.ips.push(addr_u32);
-            });
+            services
+                .iter()
+                .zip(addrs)
+                .enumerate()
+                .for_each(|(i, (serv, addr))| {
+                    let addr_u32 = u32::from_be_bytes(addr.octets());
+                    serv.blocking_lock().ip = addr_u32;
+                    serv.blocking_lock().replica_id = i;
+                    graph.services.insert(addr_u32, serv.clone());
+                    graph.ips.push(addr_u32);
+                });
         }
         Ok(())
     }
-    pub fn start_experiment(&self, id: &str) {
-        // TODO: send sigcont to runtime
-        todo!()
+    pub fn start_experiment(&self, id: &str, pid: u32) {
+        let res = unsafe { libc::kill(pid as i32, libc::SIGCONT) };
+        if res != 0 {
+            error!(
+                "Failed to signal process {} for {} w/error code {}",
+                pid, id, res
+            );
+        }
     }
     pub fn stop_experiment(&self, pid: u32, signal: SignalCode) {
         let cmd = match signal {

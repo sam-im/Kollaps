@@ -102,7 +102,7 @@ impl EventScheduler {
                     let id = self.state.lock().await.id.clone();
                     match &self.orchestrator {
                         Some(o) => {
-                            o.start_experiment(&id).await;
+                            o.start_experiment(&id, self.pid).await;
                             info!("EC {}: started experiment", self.name);
                         }
                         // `None` currently means baremetal deployment

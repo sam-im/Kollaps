@@ -71,7 +71,7 @@ async fn container_deployment(id: String, pid: u32, orchestrator: String, ifname
         "docker" => Orchestrator::Docker(DockerOrchestrator),
         "kubernetes" => Orchestrator::Kubernetes(KubernetesOrchestrator),
         "wasm" => Orchestrator::Wasm(WasmOrchestrator),
-        _ => unimplemented!("unkown argument: {}", orchestrator),
+        _ => unimplemented!("unkown orchestrator: {}", orchestrator),
     };
     let mut ec = EmulationCore::new(id.clone(), pid, Some(orchestrator), ifname);
     ec.init().await;

@@ -25,11 +25,11 @@ impl Orchestrator {
         }
     }
 
-    pub async fn start_experiment(&self, id: &str) {
+    pub async fn start_experiment(&self, id: &str, pid: u32) {
         match self {
             Orchestrator::Docker(_) => start_experiment(id).await,
             Orchestrator::Kubernetes(_) => start_experiment(id).await,
-            Orchestrator::Wasm(o) => o.start_experiment(id),
+            Orchestrator::Wasm(o) => o.start_experiment(id, pid),
         }
     }
 
