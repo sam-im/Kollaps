@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 // enum Runtime {
 //     Wasmtime,
 //     Wasmer,
@@ -20,47 +18,47 @@ use anyhow::Result;
 //     }
 // }
 
-trait Runtime {
-    fn program(&self) -> String;
-    fn args(&self) -> String;
-}
-
-pub struct Wasmtime {
-    program: String,
-    args: String,
-}
-impl Runtime for Wasmtime {
-    fn new(image: &str, command: &str) -> Self {
-        let program = "wasmtime".to_string();
-        let args = command.to_string();
-        Self { program, args }
-    }
-    fn program(&self) -> String {}
-
-    fn args(tag: &str) -> String {}
-}
-
-pub struct Wasmer;
-impl Runtime for Wasmer {
-    fn program(tag: &str) -> String {
-        todo!()
-    }
-
-    fn args(tag: &str) -> String {
-        todo!()
-    }
-}
-
-pub struct Custom;
-impl Runtime for Custom {
-    fn program(tag: &str) -> String {
-        todo!()
-    }
-
-    fn args(tag: &str) -> String {
-        todo!()
-    }
-}
+//trait Runtime {
+//    fn program(&self) -> String;
+//    fn args(&self) -> String;
+//}
+//
+//pub struct Wasmtime {
+//    program: String,
+//    args: String,
+//}
+//impl Runtime for Wasmtime {
+//    fn new(image: &str, command: &str) -> Self {
+//        let program = "wasmtime".to_string();
+//        let args = command.to_string();
+//        Self { program, args }
+//    }
+//    fn program(&self) -> String {}
+//
+//    fn args(tag: &str) -> String {}
+//}
+//
+//pub struct Wasmer;
+//impl Runtime for Wasmer {
+//    fn program(tag: &str) -> String {
+//        todo!()
+//    }
+//
+//    fn args(tag: &str) -> String {
+//        todo!()
+//    }
+//}
+//
+//pub struct Custom;
+//impl Runtime for Custom {
+//    fn program(tag: &str) -> String {
+//        todo!()
+//    }
+//
+//    fn args(tag: &str) -> String {
+//        todo!()
+//    }
+//}
 
 // pub struct Runtime {
 //     cmd: String,

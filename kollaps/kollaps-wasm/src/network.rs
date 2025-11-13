@@ -12,8 +12,7 @@ pub struct Bridge {
 
 impl Bridge {
     /// Creates a new virtual bridge struct.
-    /// To create the bridge itself on linux, call `create` on this struct.
-    /// To remove it, call `cleanup`.
+    /// To create the associated bridge on linux, call `create` on this struct.
     ///
     /// Arguments:
     /// - name: identifier to refer to this bridge when using linux `ip`.

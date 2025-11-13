@@ -1,8 +1,8 @@
 use crate::{config::Config, network::Namespace};
 use anyhow::{Context, Result};
-use tracing::debug;
+use tracing::{debug, info};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Service {
     /// Symbolic name in topology.
     pub name: String,
@@ -65,7 +65,6 @@ impl ActiveService {
 pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     use emulationcore::xmlgraphparser::XMLGraphParser;
     use std::fs::read_to_string;
-    use tracing::info;
 
     info!("Parsing topology file.");
     let topology =

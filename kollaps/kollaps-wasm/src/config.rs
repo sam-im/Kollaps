@@ -1,4 +1,5 @@
 // TODO: consider an option to start runtimes with another user
+// TODO: give arguments types
 
 pub struct Config {
     pub tmp_dir: String,
