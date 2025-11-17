@@ -1,15 +1,18 @@
+use std::net::Ipv4Addr;
+use std::str::FromStr;
+
 use crate::{config::Config, network::Namespace};
 use anyhow::{Context, Result};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug)]
 pub struct Service {
     /// Symbolic name in topology.
-    pub name: String,
+    name: String,
     /// Executable name.
-    pub image: String,
+    image: String,
     /// Any arguments to be passed to executable.
-    pub command: Option<String>,
+    command: Option<String>,
 }
 
 impl Service {
@@ -19,6 +22,15 @@ impl Service {
             image,
             command,
         }
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn image(&self) -> &str {
+        &self.image
+    }
+    pub fn command(&self) -> Option<&str> {
+        self.command.as_deref()
     }
 }
 
@@ -36,6 +48,12 @@ impl ReadyService {
         let addr = ns.addr.to_string().replace(".", "-");
         let id = format!("wasm_{}_{}", name, addr);
         Self { id, ns, service }
+    }
+    pub fn name(&self) -> &str {
+        self.service.name()
+    }
+    pub fn addr(&self) -> &Ipv4Addr {
+        &self.ns.addr
     }
 }
 
@@ -60,6 +78,9 @@ impl ActiveService {
     pub fn veth(&self) -> &String {
         &self.service.ns.veth
     }
+    pub fn ns_name(&self) -> &String {
+        &self.service.ns.name
+    }
 }
 
 pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
@@ -67,10 +88,12 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     use std::fs::read_to_string;
 
     info!("Parsing topology file.");
-    let topology =
-        read_to_string(&config.topology_path).context("Failed to read the topology file.")?;
+    let topology = read_to_string(&config.topology_path).context(format!(
+        "failed to read the topology file {}",
+        &config.topology_path
+    ))?;
     let parser = XMLGraphParser::try_new(&topology, "container".to_string())
-        .context("Failed to parse the topology file.")?;
+        .context("failed to parse the topology file")?;
 
     info!("Extracting services.");
     let services = {
@@ -97,4 +120,53 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     };
     debug!("Services = {:?}", services);
     Ok(services)
+}
+
+/// Parses the command field and returns a vector containing all arguments modified to replace variables by their address.
+/// A variable is a word that starts with '$' and followed by the name of a service and optionally ending with a replica index number.
+// TODO: include an example
+pub fn parse_command(command: &str, services: Vec<(String, Ipv4Addr)>) -> Vec<String> {
+    command.split_whitespace().fold(vec![], |mut acc, arg| {
+        let candidates: Vec<&(String, Ipv4Addr)> = services
+            .iter()
+            .filter(|(name, _)| {
+                let var_name = format!("${}", name);
+                arg.starts_with(&var_name)
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            acc.push(arg.to_string());
+        } else {
+            debug!("{} candidates for {} in {}", candidates.len(), arg, command);
+            let replica_id = arg
+                .split(&format!("${}", candidates[0].0))
+                .find(|s| !s.is_empty())
+                .and_then(|s| usize::from_str(s).ok());
+            match replica_id {
+                Some(i) => {
+                    let index = i - 1;
+                    let subst = match candidates.get(index) {
+                        Some((_, addr)) => addr.to_string(),
+                        None => {
+                            warn!(
+                                "Replica {} not found for service {} in command {}.\nLeaving the argument as is.",
+                                i,
+                                candidates[0].0,
+                                command
+                            );
+                            arg.to_string()
+                        },
+                    };
+                    debug!("arg {} is replaced by {} in command", arg, subst);
+                    acc.push(subst);
+                },
+                None => {
+                    let arg = candidates[0].1.to_string();
+                    acc.push(arg);
+                },
+            }
+        }
+        acc
+    })
 }

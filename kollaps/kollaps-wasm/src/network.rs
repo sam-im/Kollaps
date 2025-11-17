@@ -1,13 +1,14 @@
 use std::{net::Ipv4Addr, process::Command};
 
-use anyhow::{Context, Result};
-use tracing::{error, info};
+use anyhow::{Context, Error, Result};
+use tracing::{debug, error};
 
 pub struct Bridge {
     name: String,
     addr: Ipv4Addr,
-    subnet: u32,
-    namespaces: Vec<Namespace>,
+    subnet: u8,
+    // Addresses leased to namespaces.
+    ns_addr: Vec<Ipv4Addr>,
 }
 
 impl Bridge {
@@ -20,24 +21,17 @@ impl Bridge {
     /// - subnet: number of bits for host addressing in CIDR notation.
     pub fn new(name: &str, addr: Ipv4Addr, subnet: u8) -> Self {
         let name = name.to_string();
-        let subnet = match subnet {
-            0 => 0,
-            n => u32::MAX << (32 - n),
-        };
-        let namespaces = Vec::new();
+        let ns_addr = Vec::new();
 
         Self {
             name,
             addr,
             subnet,
-            namespaces,
+            ns_addr,
         }
     }
 
-    pub fn get_ns(&self, name: &str) -> Option<&Namespace> {
-        self.namespaces.iter().find(|ns| ns.name == name)
-    }
-
+    /// Create a virtual on the host using `ip`.
     pub fn create(&self) -> Result<()> {
         //ip link add name <name> type bridge
         run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"])?;
@@ -49,52 +43,51 @@ impl Bridge {
         // ip link set dev <name> up
         run_ip_cmd(&["link", "set", "dev", self.name.as_str(), "up"])?;
 
+        debug!("Created bridge {}.", self.name);
         Ok(())
     }
 
-    fn cleanup(&self) {
-        self.namespaces.iter().for_each(|ns| {
-            ns.cleanup();
-        });
-        // ip link set <name> down
-        let _ = run_ip_cmd(&["link", "set", self.name.as_str(), "down"]);
-        // ip link del <name>
-        let _ = run_ip_cmd(&["link", "del", self.name.as_str()]);
-    }
-
     pub fn create_namespace(&mut self) -> Result<Namespace> {
-        let ns_count = self.namespaces.len();
+        let ns_count = self.ns_addr.len();
 
         let name = format!("k_ns_{}", ns_count);
         let veth = format!("k_veth_{}", ns_count);
-        let addr = match self.namespaces.last() {
-            Some(ns) => Ipv4Addr::from_bits(ns.addr.to_bits() + 1),
+        let addr = match self.ns_addr.last() {
+            Some(addr) => Ipv4Addr::from_bits(addr.to_bits() + 1),
             None => {
                 Ipv4Addr::from_bits(self.addr.to_bits() + 2) // skip the gateway
             }
         };
-
+        let subnet_mask = match self.subnet {
+            0 => 0,
+            n => u32::MAX << (32 - n),
+        };
         // Check if the subnet was full.
         // We add one to the namespace address because even though
         // an address ending with .255 will not change the subnet
         // it still is reserved for subnet broadcast.
-        let tmp1 = self.addr.to_bits() & self.subnet;
-        let tmp2 = (addr.to_bits() + 1) & self.subnet;
+        let tmp1 = self.addr.to_bits() & subnet_mask;
+        let tmp2 = (addr.to_bits() + 1) & subnet_mask;
         if tmp1 != tmp2 {
-            // TODO: return an error type
             error!("Subnet was full.");
+            return Err(Error::msg("Failed to create a namespace.")
+                .context("Subnet is full, try again with larger subnet."));
         }
 
         let ns = Namespace::new(name.clone(), veth, addr);
-        self.namespaces.push(ns.clone());
+        ns.create(&self.name, self.subnet)?;
+        self.ns_addr.push(ns.addr);
         Ok(ns)
     }
 }
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        info!("Cleaning up the bridge and namespaces.");
-        self.cleanup();
+        // ip link set <name> down
+        let _ = run_ip_cmd(&["link", "set", self.name.as_str(), "down"]);
+        // ip link del <name>
+        let _ = run_ip_cmd(&["link", "del", self.name.as_str()]);
+        debug!("Removed bridge {}.", self.name);
     }
 }
 
@@ -176,11 +169,16 @@ impl Namespace {
             "lo",
             "up",
         ])?;
+        debug!("Created namespace {}.", self.name);
         Ok(())
     }
-    fn cleanup(&self) {
+}
+
+impl Drop for Namespace {
+    fn drop(&mut self) {
         // ip netns del <name>
         let _ = run_ip_cmd(&["netns", "del", self.name.as_str()]);
+        debug!("Removed namespace {}.", self.name);
     }
 }
 
@@ -192,14 +190,12 @@ pub fn run_ip_cmd(args: &[&str]) -> Result<()> {
     ))?;
 
     if !out.status.success() {
-        let err_msg = match String::from_utf8(out.stdout) {
+        let err_msg = match String::from_utf8(out.stderr) {
             Ok(output) => format!("ip command failed for args {:?} with:\n {}", args, output),
             Err(_) => format!("ip command failed for args {:?}", args),
         };
         error!("{}", err_msg);
-        // TODO: check the way you handled errors in usage before returning an error
-        // and potentially causing panics.
-        // return Err(anyhow::Error::msg(err_msg));
+        return Err(anyhow::Error::msg(err_msg));
     }
     Ok(())
 }
