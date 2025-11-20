@@ -5,6 +5,7 @@ use crate::service::{ActiveService, ReadyService, Service, parse_command, parse_
 use std::ffi::CString;
 use std::fs;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,19 +27,26 @@ pub struct Kollaps {
 
 impl Drop for Kollaps {
     fn drop(&mut self) {
-        debug!("Cleaning up spawned processes.");
+        debug!("Cleaning up processes.");
         if let Some(services) = &self.services {
             services.iter().for_each(|s| unsafe {
-                let _ = libc::kill(s.pid(), libc::SIGINT);
+                let res = libc::kill(s.pid(), libc::SIGINT);
+                // Handle the case where the experiment is never started and the services
+                // are still paused forks of this process that waits to spawn the actual services.
+                // Processes paused with SIGSTOP will receive SIGINT only after they are restarted.
+                let _ = libc::kill(s.pid(), libc::SIGCONT);
+                debug!("Sent SIGINT to service {}, result was {}", s.name(), res);
             });
         }
         if let Some(ecores) = &mut self.ecores {
             ecores.iter_mut().for_each(|e| {
-                let _ = e.kill();
+                let res = e.kill();
+                debug!("Sent SIGINT to an emulationcore instance ({}), result was {:?}", e.id(), res);
             });
         }
         if let Some(comms) = &mut self.comms {
-            let _ = comms.kill();
+            let res = comms.kill();
+            debug!("Sent SIGINT to communicationmanager ({}), result was {:?}", comms.id(), res);
         }
     }
 }
@@ -151,6 +159,9 @@ impl Kollaps {
         });
 
         let _ = fs::create_dir(&self.config.tmp_dir);
+        let perms = fs::Permissions::from_mode(0o666);
+        fs::set_permissions(&self.config.tmp_dir, perms)?;
+
         fs::File::create(&self.config.remote_ips_path)
             .context("failed to create empty remote_ips file in temp dir")?;
 
@@ -210,23 +221,23 @@ impl Kollaps {
                     pid = libc::fork();
                     match pid {
                         0 => {
-                            debug!("Child for {} raising SIGSTOP.", s.id);
+                            debug!("{} raising SIGSTOP.", s.id);
                             raise(SIGSTOP);
 
-                            debug!("Child for service {} received SIGCONT.", s.id);
+                            debug!("{} received SIGCONT.", s.id);
                             let res = execlp(program.as_ptr(), args.as_ptr());
 
                             error!(
-                                "Child for service {} failed to run {} with error code {}",
+                                "Service {} failed to run {} with error code {}",
                                 s.id,
                                 program.to_string_lossy(),
                                 res
                             );
-                            // Exit without executing child's RAII guards inherited from parent.
+                            // Exit without executing child's RAII guards that are inherited from parent.
                             std::process::exit(-1);
                         }
                         pid if pid < 0 => {
-                            panic!("Failed to fork service handler, error code: {}", pid);
+                            error!("Failed to fork service handler, error code: {}", pid);
                         }
                         pid => {
                             debug!(
@@ -239,6 +250,10 @@ impl Kollaps {
                 ActiveService::new(pid, s)
             })
             .collect();
+        if services.iter().any(|s| s.pid() < 0) {
+            services.iter().for_each(|s| unsafe { libc::kill(s.pid(), libc::SIGINT); });
+            return Err(Error::msg("Failed to spawn one or more service."));
+        }
         Ok(services)
     }
 
