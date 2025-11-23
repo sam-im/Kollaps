@@ -1,5 +1,5 @@
 // TODO: consider an option to start runtimes with another user
-// TODO: give arguments types
+// TODO: give types to arguments
 
 pub struct Config {
     pub tmp_dir: String,
@@ -9,7 +9,6 @@ pub struct Config {
     pub topology_path: String,
     pub addr: String,
     pub subnet: u8,
-    // pub if_name: String,
 }
 
 impl Default for Config {
@@ -19,7 +18,6 @@ impl Default for Config {
         let topoinfo_path = format!("{}topoinfo", tmp_dir);
         let topoinfodashboard_path = format!("{}topoinfodashboard", tmp_dir);
         let topology_path = "topology.xml".to_owned();
-        // let if_name = "eth0".to_owned();
         let addr = "10.10.10.0".to_owned();
         let subnet = 24;
 
@@ -28,7 +26,6 @@ impl Default for Config {
             remote_ips_path,
             topoinfo_path,
             topoinfodashboard_path,
-            // if_name,
             topology_path,
             addr,
             subnet,

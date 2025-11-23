@@ -3,7 +3,6 @@ use crate::network::Bridge;
 use crate::service::{ActiveService, ReadyService, Service, parse_command, parse_services};
 
 use std::ffi::CString;
-use std::fs;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command};
@@ -12,9 +11,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
+use std::{fs, ptr};
 
 use anyhow::{Context, Error, Result};
-use libc::{SIGSTOP, execlp, raise};
+use libc::{SIGSTOP, execvp, raise};
 use tracing::{debug, error, info};
 
 pub struct Kollaps {
@@ -41,12 +41,20 @@ impl Drop for Kollaps {
         if let Some(ecores) = &mut self.ecores {
             ecores.iter_mut().for_each(|e| {
                 let res = e.kill();
-                debug!("Sent SIGINT to an emulationcore instance ({}), result was {:?}", e.id(), res);
+                debug!(
+                    "Sent SIGINT to an emulationcore instance ({}), result was {:?}",
+                    e.id(),
+                    res
+                );
             });
         }
         if let Some(comms) = &mut self.comms {
             let res = comms.kill();
-            debug!("Sent SIGINT to communicationmanager ({}), result was {:?}", comms.id(), res);
+            debug!(
+                "Sent SIGINT to communicationmanager ({}), result was {:?}",
+                comms.id(),
+                res
+            );
         }
     }
 }
@@ -149,17 +157,17 @@ impl Kollaps {
         let mut topoinfo = String::new();
         let mut topoinfodashboard = String::new();
         services.iter().for_each(|s| {
-            if s.service.name() == "dashboard" {
-                topoinfodashboard.push_str(&s.id);
+            if s.name() == "dashboard" {
+                topoinfodashboard.push_str(s.id());
                 topoinfodashboard.push('\n');
             } else {
-                topoinfo.push_str(&s.id);
+                topoinfo.push_str(s.id());
                 topoinfo.push('\n');
             }
         });
 
         let _ = fs::create_dir(&self.config.tmp_dir);
-        let perms = fs::Permissions::from_mode(0o666);
+        let perms = fs::Permissions::from_mode(0o777); // TODO: is this safe?
         fs::set_permissions(&self.config.tmp_dir, perms)?;
 
         fs::File::create(&self.config.remote_ips_path)
@@ -182,10 +190,11 @@ impl Kollaps {
         Ok(())
     }
 
-    /// For each service forks a process that raises SIGSTOP immediately.
-    /// The forked process runs the specified process name with arguments when receiving a SIGCONT.
-    /// Any service name starting with '$' and optionally followed by its replica name is replaced by its
-    /// address on the bridge.
+    /// For each service forks a child process that raises SIGSTOP immediately and,
+    /// after receiving a SIGCONT, runs the program specified by its service.
+    ///
+    /// Any name of a service in the arguments that starts with '$' and is optionally
+    /// followed by a replica index is replaced by its address on the network bridge.
     fn make_active_services(&mut self, services: Vec<ReadyService>) -> Result<Vec<ActiveService>> {
         info!("Starting services.");
         let alist = services
@@ -193,47 +202,59 @@ impl Kollaps {
             .map(|s| (s.name().to_owned(), s.addr().to_owned()))
             .collect::<Vec<(String, Ipv4Addr)>>();
 
+        let to_cstr = |str: &str| -> CString { CString::from_str(str).unwrap() };
         let services: Vec<ActiveService> = services
             .into_iter()
-            .filter(|s| s.service.name() != "dashboard")
+            .filter(|s| s.name() != "dashboard")
             .map(|s| {
-                let mut args = vec![
-                    "netns".to_owned(),
-                    "exec".to_owned(),
-                    s.ns.name.clone(),
-                    s.service.image().to_string(),
+                let mut cstrings = vec![
+                    to_cstr("ip"),
+                    to_cstr("netns"),
+                    to_cstr("exec"),
+                    to_cstr(s.ns().name()),
+                    to_cstr(s.image()),
                 ];
-                let service_args = match s.service.command() {
+                let service_args = match s.command() {
                     Some(args) => parse_command(args, alist.clone()),
                     None => vec![],
                 };
-                args.extend(service_args);
-                let args = args.join(" ");
+                for a in service_args {
+                    cstrings.push(to_cstr(&a))
+                }
+
+                let mut argv = cstrings.iter().map(|c| c.as_ptr()).collect::<Vec<_>>();
+                argv.push(ptr::null_mut());
 
                 // Using `libc::fork` we can create a child for each service that raises SIGSTOP immediately.
                 // This way we can defer the starting of runtimes to emulationcore and still have each
                 // runtime's PID beforehand.
                 let pid;
-                let program = CString::new("ip").unwrap();
-                let args = CString::new(args).unwrap();
 
                 unsafe {
                     pid = libc::fork();
                     match pid {
                         0 => {
-                            debug!("{} raising SIGSTOP.", s.id);
+                            debug!("{} raising SIGSTOP.", s.id());
                             raise(SIGSTOP);
 
-                            debug!("{} received SIGCONT.", s.id);
-                            let res = execlp(program.as_ptr(), args.as_ptr());
-
+                            debug!("{} received SIGCONT.", s.id());
+                            execvp(argv[0], argv.as_ptr());
+                            // If the following code executes, then `exec` have failed,
+                            // and the child needs to call `std::process::exit` to avoid
+                            // running any destructors.
+                            // This can be improved by implementing a flag that a child
+                            // can set and running the destructors conditionally.
+                            let err = std::io::Error::last_os_error();
                             error!(
-                                "Service {} failed to run {} with error code {}",
-                                s.id,
-                                program.to_string_lossy(),
-                                res
+                                "Service {} failed to run {}.\nError:\n{}.",
+                                s.id(),
+                                cstrings
+                                    .iter()
+                                    .map(|s| s.to_string_lossy())
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                err,
                             );
-                            // Exit without executing child's RAII guards that are inherited from parent.
                             std::process::exit(-1);
                         }
                         pid if pid < 0 => {
@@ -242,7 +263,8 @@ impl Kollaps {
                         pid => {
                             debug!(
                                 "Forked a paused process for service {} with pid: {}.",
-                                s.id, pid
+                                s.id(),
+                                pid
                             );
                         }
                     }
@@ -250,9 +272,12 @@ impl Kollaps {
                 ActiveService::new(pid, s)
             })
             .collect();
+        // If any of the forks have failed, clean up and return an error instead.
         if services.iter().any(|s| s.pid() < 0) {
-            services.iter().for_each(|s| unsafe { libc::kill(s.pid(), libc::SIGINT); });
-            return Err(Error::msg("Failed to spawn one or more service."));
+            services.iter().for_each(|child| unsafe {
+                libc::kill(child.pid(), libc::SIGINT);
+            });
+            return Err(Error::msg("Failed to spawn one or more services."));
         }
         Ok(services)
     }

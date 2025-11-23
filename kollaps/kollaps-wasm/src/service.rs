@@ -5,6 +5,7 @@ use crate::{config::Config, network::Namespace};
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
+/// Represents a service defined in a topology description file.
 #[derive(Clone, Debug)]
 pub struct Service {
     /// Symbolic name in topology.
@@ -16,6 +17,15 @@ pub struct Service {
 }
 
 impl Service {
+    /// Each argument corresponds to a tag with the same name in the service
+    /// descriptions of a topology description file.
+    ///
+    /// Arguments:
+    /// - `name`: specifies a name that is used to refer to this service.
+    /// - `image`: specifies the name of an executable in `PATH`.
+    /// - `command`: can be optionally set to pass arguments to the executable
+    ///    specified by `image`.
+    ///    Arguments in `command` can include variables, see `parse_command`.
     pub fn new(name: String, image: String, command: Option<String>) -> Self {
         Self {
             name,
@@ -34,32 +44,45 @@ impl Service {
     }
 }
 
+/// Represents a service and a namespace pair.
 #[derive(Clone)]
 pub struct ReadyService {
-    pub id: String,
-    pub ns: Namespace,
-    pub service: Service,
+    id: String,
+    ns: Namespace,
+    service: Service,
 }
 
 impl ReadyService {
     pub fn new(service: Service, ns: Namespace) -> Self {
         // Replace '_' by another character as we use it later to parse the id.
         let name = service.name.replace("_", "-");
-        let addr = ns.addr.to_string().replace(".", "-");
+        let addr = ns.addr().to_string().replace(".", "-");
         let id = format!("wasm_{}_{}", name, addr);
         Self { id, ns, service }
+    }
+    pub fn id(&self) -> &str {
+        &self.id
     }
     pub fn name(&self) -> &str {
         self.service.name()
     }
+    pub fn image(&self) -> &str {
+        self.service.image()
+    }
+    pub fn command(&self) -> Option<&str> {
+        self.service.command()
+    }
+    pub fn ns(&self) -> &Namespace {
+        &self.ns
+    }
     pub fn addr(&self) -> &Ipv4Addr {
-        &self.ns.addr
+        &self.ns.addr()
     }
 }
 
 pub struct ActiveService {
-    pub pid: i32,
-    pub service: ReadyService,
+    pid: i32,
+    service: ReadyService,
 }
 
 impl ActiveService {
@@ -69,17 +92,17 @@ impl ActiveService {
     pub fn pid(&self) -> i32 {
         self.pid
     }
-    pub fn id(&self) -> &String {
+    pub fn id(&self) -> &str {
         &self.service.id
     }
-    pub fn name(&self) -> &String {
+    pub fn name(&self) -> &str {
         &self.service.service.name
     }
-    pub fn veth(&self) -> &String {
-        &self.service.ns.veth
+    pub fn veth(&self) -> &str {
+        &self.service.ns.veth()
     }
-    pub fn ns_name(&self) -> &String {
-        &self.service.ns.name
+    pub fn ns_name(&self) -> &str {
+        &self.service.ns.name()
     }
 }
 
@@ -122,9 +145,12 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     Ok(services)
 }
 
-/// Parses the command field and returns a vector containing all arguments modified to replace variables by their address.
-/// A variable is a word that starts with '$' and followed by the name of a service and optionally ending with a replica index number.
 // TODO: include an example
+/// Parses a command and returns a vector containing arguments to be used as an argv for a service process.
+/// An argument that starts with a '$' and is a service name designates a variable to be replaced by the address
+/// of the respective service.
+/// Such a variable can optionally include a suffix for a replica index number to allow choosing a specific instance
+/// of the same service.
 pub fn parse_command(command: &str, services: Vec<(String, Ipv4Addr)>) -> Vec<String> {
     command.split_whitespace().fold(vec![], |mut acc, arg| {
         let candidates: Vec<&(String, Ipv4Addr)> = services

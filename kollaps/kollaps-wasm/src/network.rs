@@ -7,7 +7,7 @@ pub struct Bridge {
     name: String,
     addr: Ipv4Addr,
     subnet: u8,
-    // Addresses leased to namespaces.
+    /// Addresses leased to namespaces.
     ns_addr: Vec<Ipv4Addr>,
 }
 
@@ -93,10 +93,10 @@ impl Drop for Bridge {
 
 #[derive(Clone, Debug)]
 pub struct Namespace {
-    pub name: String,
-    pub veth: String,
+    name: String,
+    veth: String,
     veth_peer: String,
-    pub addr: Ipv4Addr,
+    addr: Ipv4Addr,
 }
 
 impl Namespace {
@@ -108,6 +108,15 @@ impl Namespace {
             veth_peer,
             addr,
         }
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn veth(&self) -> &str {
+        &self.veth
+    }
+    pub fn addr(&self) -> &Ipv4Addr {
+        &self.addr
     }
     fn create(&self, bridge: &str, subnet: u8) -> Result<()> {
         // ip netns add <name>
