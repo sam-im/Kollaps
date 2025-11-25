@@ -14,9 +14,11 @@ use std::time::{Duration, Instant};
 use subprocess::Popen;
 use subprocess::PopenConfig;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+const TOPOLOGY_PATH: &str = "topology.xml";
 
 pub struct EmulationCore {
     id: String,
@@ -214,7 +216,7 @@ impl EmulationCore {
 
     pub async fn init(&mut self) {
         // Parse the topology
-        let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
+        let text = std::fs::read_to_string(TOPOLOGY_PATH).unwrap();
         let parser = XMLGraphParser::try_new(&text, "container".to_string())
             .expect("topology must be a valid xml file");
         let (config, mut initial_graph) = parser.fill_graph().await;
@@ -224,10 +226,14 @@ impl EmulationCore {
         self.max_age = config.max_age;
 
         // Get ips of all containers
-        info!("EC {} - retrieving container IPs", self.name);
         tokio::time::sleep(Duration::from_secs(2)).await;
         if let Some(o) = &self.orchestrator {
-            let _ = o.resolve_hostnames(&mut initial_graph).await;
+            let res = o.resolve_hostnames(&mut initial_graph).await;
+            debug!(
+                "resolved {} addresses, returned result was {:?}",
+                initial_graph.services.keys().len(),
+                res
+            );
         }
 
         let self_addr = get_own_ip(self.networkdevice.clone());

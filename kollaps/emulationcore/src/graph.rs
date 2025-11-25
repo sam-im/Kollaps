@@ -18,6 +18,7 @@ use crate::elements::{Flowu16, Link, Path, Service};
 use rand::Rng;
 use std::collections::HashMap;
 use std::f32::INFINITY;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
@@ -488,6 +489,7 @@ impl Graph {
     }
 
     pub async fn set_graph_root(&mut self, self_addr: u32) -> Result<(), ()> {
+        debug!("Self address: {}", Ipv4Addr::from_bits(self_addr));
         match self.services.get_mut(&self_addr) {
             Some(root) => {
                 self.graph_root = Some(Arc::clone(root));

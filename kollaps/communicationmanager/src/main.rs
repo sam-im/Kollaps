@@ -38,11 +38,11 @@ use capnp_schemas::message_capnp::message::Reader;
 use tracing::{Level, debug, error, info};
 use tracing_subscriber::FmtSubscriber;
 
-const REMOTE_IPS_PATH: &str = "/remote_ips.txt";
-const LOCAL_IDS_PATH: &str = "/tmp/topoinfo";
-const DASHBOARD_ID_PATH: &str = "/tmp/topoinfodashboard";
-const READ_PIPES_PATH: &str = "/tmp/piperead";
-const WRITE_PIPES_PATH: &str = "/tmp/pipewrite";
+const REMOTE_IPS_PATH: &str = "/tmp/kollaps/remote_ips.txt";
+const LOCAL_IDS_PATH: &str = "/tmp/kollaps/topoinfo";
+const DASHBOARD_ID_PATH: &str = "/tmp/kollaps/topoinfodashboard";
+const READ_PIPES_PATH: &str = "/tmp/kollaps/pipes/piperead";
+const WRITE_PIPES_PATH: &str = "/tmp/kollaps/pipes/pipewrite";
 const SETUP_PORT: u16 = 8080;
 const EXCHANGE_PORT: u16 = 8081;
 

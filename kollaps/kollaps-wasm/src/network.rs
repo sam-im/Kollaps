@@ -34,7 +34,7 @@ impl Bridge {
     /// Create a virtual on the host using `ip`.
     pub fn create(&self) -> Result<()> {
         //ip link add name <name> type bridge
-        run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"])?;
+        run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"])?; // TODO: match error, delete existing bridge, and retry
 
         // ip addr add <addr>/<subnet> dev <name>
         let cidr = format!("{}/{}", self.addr, self.subnet);
@@ -120,7 +120,7 @@ impl Namespace {
     }
     fn create(&self, bridge: &str, subnet: u8) -> Result<()> {
         // ip netns add <name>
-        run_ip_cmd(&["netns", "add", self.name.as_str()])?;
+        run_ip_cmd(&["netns", "add", self.name.as_str()])?; // TODO: match error, delete existing bridge, and retry
         // ip link add <veth> type veth peer name <veth_peer>
         run_ip_cmd(&[
             "link",

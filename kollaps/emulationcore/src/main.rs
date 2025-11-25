@@ -46,8 +46,7 @@ fn main() {
         .build()
         .unwrap();
 
-    // TODO: proper argument parsing
-    // TODO: optional argument to set the kollaps tmp dir (then update resolve_hostnames of wasm)
+    // TODO: argument parsing
     if !(env::args().nth(4) == Some("baremetal".to_string())) {
         let id = env::args().nth(1).unwrap();
         let pid = env::args().nth(2).unwrap().parse::<u32>().unwrap();

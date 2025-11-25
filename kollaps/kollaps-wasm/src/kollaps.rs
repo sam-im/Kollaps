@@ -15,7 +15,7 @@ use std::{fs, ptr};
 
 use anyhow::{Context, Error, Result};
 use libc::{SIGSTOP, execvp, raise};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct Kollaps {
     config: Config,
@@ -73,14 +73,14 @@ impl Kollaps {
     pub fn run(&mut self) -> Result<()> {
         let services = parse_services(&self.config)?;
 
-        self.bridge = Some(self.make_bridge("k_wasm")?);
+        self.bridge = Some(self.make_bridge("kollaps")?);
 
         let services = self.make_ready_services(services)?;
 
         self.setup_tempdir(&services)?;
 
         info!("Starting communicationmanager.");
-        let comms = Command::new("./communicationmanager")
+        let comms = Command::new("./bin/communicationmanager")
             .arg(services.len().to_string())
             .spawn()
             .context("failed to start communicationmanager")?;
@@ -96,7 +96,7 @@ impl Kollaps {
                 if let Ok(result) = res
                     && let Some(exit_status) = result
                 {
-                    info!(
+                    debug!(
                         "An emulationcore instance exited with: {}",
                         exit_status.to_string()
                     );
@@ -139,13 +139,13 @@ impl Kollaps {
     fn make_ready_services(&mut self, services: Vec<Service>) -> Result<Vec<ReadyService>> {
         info!("Creating a namespace for each service.");
         let mut ready_services = vec![];
-        for s in services {
+        for s in services.into_iter() {
             let ns = self
                 .bridge
                 .as_mut()
                 .unwrap()
                 .create_namespace()
-                .context("Failed to created a namespace.")?;
+                .context("Failed to create a namespace.")?;
             let s = ReadyService::new(s, ns);
             ready_services.push(s);
         }
@@ -166,9 +166,15 @@ impl Kollaps {
             }
         });
 
-        let _ = fs::create_dir(&self.config.tmp_dir);
-        let perms = fs::Permissions::from_mode(0o777); // TODO: is this safe?
-        fs::set_permissions(&self.config.tmp_dir, perms)?;
+        let dirs = vec![
+            (&self.config.tmp_dir, 0o775),
+            (&self.config.pipes_dir, 0o777),
+            (&self.config.logs_dir, 0o777),
+        ];
+        for dir in dirs {
+            let _ = fs::create_dir(dir.0);
+            fs::set_permissions(dir.0, fs::Permissions::from_mode(dir.1))?;
+        }
 
         fs::File::create(&self.config.remote_ips_path)
             .context("failed to create empty remote_ips file in temp dir")?;
@@ -236,14 +242,43 @@ impl Kollaps {
                         0 => {
                             debug!("{} raising SIGSTOP.", s.id());
                             raise(SIGSTOP);
-
                             debug!("{} received SIGCONT.", s.id());
+
+                            // Redirects the outputs of the child to a logfile.
+                            let log_file =
+                                CString::new(format!("{}{}.log", &self.config.logs_dir, s.id()))
+                                    .unwrap();
+                            let fd = libc::open(
+                                log_file.as_ptr(),
+                                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                                0o644,
+                            );
+                            if libc::dup2(fd, libc::STDOUT_FILENO) < 0
+                                || libc::dup2(fd, libc::STDERR_FILENO) < 0
+                            {
+                                let err = std::io::Error::last_os_error();
+                                warn!(
+                                    "Failed to redirect output of {} to logfile {}.\nError:\n{}",
+                                    s.id(),
+                                    log_file.to_string_lossy(),
+                                    err
+                                );
+                            } else {
+                                libc::fcntl(libc::STDOUT_FILENO, libc::F_SETFD, 0);
+                                libc::fcntl(libc::STDERR_FILENO, libc::F_SETFD, 0);
+                                if fd > libc::STDERR_FILENO {
+                                    libc::close(fd);
+                                }
+                            }
+
+                            // Replaces the current process
                             execvp(argv[0], argv.as_ptr());
+
                             // If the following code executes, then `exec` have failed,
                             // and the child needs to call `std::process::exit` to avoid
                             // running any destructors.
-                            // This can be improved by implementing a flag that a child
-                            // can set and running the destructors conditionally.
+                            // This can be improved by implementing a flag that is set
+                            // by the child to conditionally run destructors.
                             let err = std::io::Error::last_os_error();
                             error!(
                                 "Service {} failed to run {}.\nError:\n{}.",
@@ -272,13 +307,17 @@ impl Kollaps {
                 ActiveService::new(pid, s)
             })
             .collect();
-        // If any of the forks have failed, clean up and return an error instead.
+
+        // If any fails, kill the correct ones and return an error.
         if services.iter().any(|s| s.pid() < 0) {
-            services.iter().for_each(|child| unsafe {
-                libc::kill(child.pid(), libc::SIGINT);
-            });
+            services.iter()
+                .filter(|s| s.pid() > 0)
+                .for_each(|child| unsafe {
+                    libc::kill(child.pid(), libc::SIGINT);
+                });
             return Err(Error::msg("Failed to spawn one or more services."));
         }
+
         Ok(services)
     }
 
@@ -296,7 +335,7 @@ impl Kollaps {
                 let child = Command::new("ip")
                     .args(["netns", "exec", service.ns_name()])
                     .args([
-                        "./emulationcore",
+                        "./bin/emulationcore",
                         service.id(),
                         &service.pid().to_string(),
                         "wasm",

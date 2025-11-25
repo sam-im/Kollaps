@@ -25,8 +25,8 @@ use std::io::BufReader;
 use std::sync::OnceLock;
 use std::thread;
 
-const READ_PIPE_PATH: &str = "/tmp/piperead";
-const WRITE_PIPE_PATH: &str = "/tmp/pipewrite";
+const READ_PIPE_PATH: &str = "/tmp/kollaps/pipes/piperead";
+const WRITE_PIPE_PATH: &str = "/tmp/kollaps/pipes/pipewrite";
 
 static PIPES: OnceLock<Pipes> = OnceLock::new();
 static DASHBOARD: OnceLock<PyObject> = OnceLock::new();
@@ -49,7 +49,7 @@ fn libcommunicationcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
 // Creates pipes belonging to the Dashboard service.
 #[pyfunction]
 fn start(_py: Python, id: String, _name: String, _ip: u32, _link_count: u32) -> PyResult<()> {
-    println!("Dashboard (communicationcore): starting.");
+    println!("Dashboard (communicationcore id {id}): starting.");
 
     let read_path = format!("{}{}", READ_PIPE_PATH, id);
     let c_path = CString::new(read_path.clone())?;
@@ -62,7 +62,6 @@ fn start(_py: Python, id: String, _name: String, _ip: u32, _link_count: u32) -> 
     unsafe {
         libc::mkfifo(c_path.as_ptr(), 0o644);
     }
-
     let read_pipe = OpenOptions::new()
         .read(true)
         .open(read_path)?;
@@ -73,6 +72,7 @@ fn start(_py: Python, id: String, _name: String, _ip: u32, _link_count: u32) -> 
 
     let communication = Pipes { read_pipe, _write_pipe };
     PIPES.get_or_init(|| communication);
+    println!("Dashboard (communicationcore id {id}): startup ended.");
     Ok(())
 }
 

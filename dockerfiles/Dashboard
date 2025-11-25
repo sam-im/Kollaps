@@ -1,3 +1,4 @@
+# Baremetal Dashboard Image
 FROM debian:12
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -34,4 +35,8 @@ RUN apt-get purge -y python3-pip python3-venv && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
+# If you end up updating the binaries inside the baremetal directory or, depend on the newer versions, know that,
+# the Dashboard API has changed and you will need to provide the type of the deployment as the first argument.
+# i.e. you will need to use the following instead:
+# ENTRYPOINT ["/opt/venv/bin/python3", "-m", "kollaps.dashboard.Dashboard", "baremetal", "baremetal/topology.xml"]
 ENTRYPOINT ["/opt/venv/bin/python3", "-m", "kollaps.dashboard.Dashboard", "baremetal/topology.xml"]

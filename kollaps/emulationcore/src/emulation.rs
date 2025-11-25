@@ -15,7 +15,9 @@
 
 use libloading::{Library, Symbol};
 use tokio::sync::mpsc;
-use tracing::{error, warn};
+use tracing::warn;
+
+const TCAL_PATH: &str = "./bin/libTCAL.so";
 
 /// Sender to the Emulation (TCAL client) receiver loop.
 /// Cloning this struct is cheap, since it only encapsulates the `mpsc::Sender`.
@@ -115,7 +117,7 @@ enum EmulationCmd {
 }
 
 async fn recv_loop(mut rx: mpsc::Receiver<EmulationCmd>) {
-    let tc_lib = unsafe { Library::new("/usr/local/bin/libTCAL.so").unwrap() };
+    let tc_lib = unsafe { Library::new(TCAL_PATH).unwrap() };
 
     let init: Symbol<unsafe extern "C" fn(u32, u32, u32)> = unsafe { tc_lib.get(b"init").unwrap() };
     let set_path: Symbol<unsafe extern "C" fn(u32, u32, f32, f32, f32)> =
@@ -143,8 +145,7 @@ async fn recv_loop(mut rx: mpsc::Receiver<EmulationCmd>) {
                 drop,
             } => {
                 if latency == 0.0 {
-                    error!(latency, "latency between two nodes can not be 0");
-                    std::process::exit(-1);
+                    panic!("latency between two nodes can not be 0")
                 }
                 unsafe {
                     set_path(ip, bandwidth, latency, jitter, drop);

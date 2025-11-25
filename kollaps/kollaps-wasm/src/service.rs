@@ -141,7 +141,7 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
             })
             .collect::<Vec<Service>>()
     };
-    debug!("Services = {:?}", services);
+    debug!("Services = {:#?}", services);
     Ok(services)
 }
 

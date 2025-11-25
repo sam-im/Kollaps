@@ -21,7 +21,7 @@ impl Orchestrator {
         match self {
             Orchestrator::Docker(o) => o.resolve_hostnames(graph).await,
             Orchestrator::Kubernetes(o) => o.resolve_hostnames(graph).await,
-            Orchestrator::Wasm(o) => o.resolve_hostnames(graph),
+            Orchestrator::Wasm(o) => o.resolve_hostnames(graph).await,
         }
     }
 
@@ -29,7 +29,7 @@ impl Orchestrator {
         match self {
             Orchestrator::Docker(_) => start_experiment(id).await,
             Orchestrator::Kubernetes(_) => start_experiment(id).await,
-            Orchestrator::Wasm(o) => o.start_experiment(id, pid),
+            Orchestrator::Wasm(o) => o.start_experiment(id, pid).await,
         }
     }
 
@@ -37,7 +37,7 @@ impl Orchestrator {
         match self {
             Orchestrator::Docker(_) => stop_experiment(pid, signal_code).await,
             Orchestrator::Kubernetes(_) => stop_experiment(pid, signal_code).await,
-            Orchestrator::Wasm(o) => o.stop_experiment(pid, signal_code),
+            Orchestrator::Wasm(o) => o.stop_experiment(pid, signal_code).await,
         }
     }
 }
