@@ -325,25 +325,27 @@ impl EmulationCore {
 
     pub async fn start_cm(&mut self, service_count: usize) -> Popen {
         // Create auxiliary files, CM reads from these files, dashboard is not relevant we just create an empty file
+        let _ = std::fs::create_dir("/tmp/kollaps/");
+        let _ = std::fs::create_dir("/tmp/kollaps/pipes/");
         OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/tmp/topoinfodashboard")
+            .truncate(true)
+            .open("/tmp/kollaps/topoinfodashboard")
             .unwrap();
 
         let mut topoinfo = OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/tmp/topoinfo")
+            .truncate(true)
+            .open("/tmp/kollaps/topoinfo")
             .unwrap();
 
         let mut remote_ips = OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/remote_ips.txt")
+            .truncate(true)
+            .open("/tmp/kollaps/remote_ips.txt")
             .unwrap();
 
         for (ip, _) in self

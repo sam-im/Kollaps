@@ -29,6 +29,8 @@ const SLEEP_DURATION: Duration = Duration::from_millis(1000);
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+const IPS: &str = "ips.txt";
+
 fn main() -> Result<()> {
     let topology_file = env::args().nth(1).unwrap();
     let command = env::args().nth(2).unwrap();
@@ -56,8 +58,8 @@ async fn process_command(topology_file: String, command: String) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/ips.txt")
+            .truncate(true)
+            .open(IPS)
             .await?;
 
         for ip in ips {
@@ -99,9 +101,7 @@ async fn process_command(topology_file: String, command: String) -> Result<()> {
     }
 
     if command == "start" {
-        let pathremoteips = "/ips.txt";
-
-        let file = OpenOptions::new().read(true).open(&pathremoteips).await?;
+        let file = OpenOptions::new().read(true).open(IPS).await?;
 
         let reader = BufReader::new(file);
 
@@ -141,9 +141,7 @@ async fn process_command(topology_file: String, command: String) -> Result<()> {
     }
 
     if command == "stop" {
-        let pathremoteips = "/ips.txt";
-
-        let file = OpenOptions::new().read(true).open(&pathremoteips).await?;
+        let file = OpenOptions::new().read(true).open(IPS).await?;
 
         let reader = BufReader::new(file);
 
