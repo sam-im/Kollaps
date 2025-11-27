@@ -3,6 +3,7 @@ use crate::network::Bridge;
 use crate::service::{ActiveService, ReadyService, Service, parse_command, parse_services};
 
 use std::ffi::CString;
+use std::fs::File;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command};
@@ -74,20 +75,11 @@ impl Kollaps {
         let services = parse_services(&self.config)?;
 
         self.bridge = Some(self.make_bridge("kollaps")?);
-
         let services = self.make_ready_services(services)?;
 
         self.setup_tempdir(&services)?;
-
-        info!("Starting communicationmanager.");
-        let comms = Command::new("./bin/communicationmanager")
-            .arg(services.len().to_string())
-            .spawn()
-            .context("failed to start communicationmanager")?;
-        self.comms = Some(comms);
-
+        self.comms = Some(self.make_comms(services.len())?);
         self.services = Some(self.make_active_services(services)?);
-
         self.ecores = Some(self.make_ecores()?);
 
         // Checks if all emulationcore instances have exited.
@@ -106,17 +98,20 @@ impl Kollaps {
             })
         };
 
-        // Sets up a signal flag to run RAII guards before exiting.
+        // Sets up a signal flag to run destructors before exiting.
         let term = Arc::new(AtomicBool::new(false));
         for sig in signal_hook::consts::TERM_SIGNALS {
             signal_hook::flag::register(*sig, Arc::clone(&term))
                 .context("Failed to set signal handlers.")?;
         }
 
+        info!("Ready. Start the dashboard or hit CTRL+C to exit.");
+
         // Exits if the signal flag is set, or all ecore instances have exited.
         while !term.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(100));
             if is_done(self.ecores.as_mut().unwrap()) {
+                info!("All emulationcore instances exited");
                 break;
             }
         }
@@ -194,6 +189,21 @@ impl Kollaps {
         debug(&topoinfodashboard, &self.config.topoinfodashboard_path);
 
         Ok(())
+    }
+
+    fn make_comms(&self, service_count: usize) -> Result<Child> {
+        info!("Starting communicationmanager.");
+        let stdout = File::create(format!("{}.communicationmanager.log", &self.config.logs_dir))?;
+        let stderr = stdout.try_clone()?;
+
+        let comms = Command::new("./bin/communicationmanager")
+            .arg(service_count.to_string())
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .context("failed to start communicationmanager")?;
+
+        Ok(comms)
     }
 
     /// For each service forks a child process that raises SIGSTOP immediately and,
@@ -310,7 +320,8 @@ impl Kollaps {
 
         // If any fails, kill the correct ones and return an error.
         if services.iter().any(|s| s.pid() < 0) {
-            services.iter()
+            services
+                .iter()
                 .filter(|s| s.pid() > 0)
                 .for_each(|child| unsafe {
                     libc::kill(child.pid(), libc::SIGINT);
@@ -332,6 +343,24 @@ impl Kollaps {
             .iter()
             .filter(|service| service.name() != "dashboard")
             .fold(vec![], |mut acc, service| {
+                let (stdout, stderr) =
+                    match File::create(format!("{}.emulationcore_{}.log", &self.config.logs_dir, service.id())) {
+                        Ok(stdout) => {
+                            let stderr = match stdout.try_clone() {
+                                Ok(stderr) => stderr,
+                                Err(e) => {
+                                    acc.push(Err(e));
+                                    return acc;
+                                }
+                            };
+                            (stdout, stderr)
+                        }
+                        Err(e) => {
+                            acc.push(Err(e));
+                            return acc;
+                        }
+                    };
+
                 let child = Command::new("ip")
                     .args(["netns", "exec", service.ns_name()])
                     .args([
@@ -341,6 +370,8 @@ impl Kollaps {
                         "wasm",
                         service.veth(),
                     ])
+                    .stdout(stdout)
+                    .stderr(stderr)
                     .spawn();
                 acc.push(child);
                 acc

@@ -1,7 +1,7 @@
 use std::{net::Ipv4Addr, process::Command};
 
 use anyhow::{Context, Error, Result};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 pub struct Bridge {
     name: String,
@@ -34,7 +34,21 @@ impl Bridge {
     /// Create a virtual on the host using `ip`.
     pub fn create(&self) -> Result<()> {
         //ip link add name <name> type bridge
-        run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"])?; // TODO: match error, delete existing bridge, and retry
+        let create = || run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"]);
+        if let Err(e) = create() {
+            // if it fails, try removing it and try again
+            warn!(
+                "Failed to create namespace {}.\nError: {}.\nTrying again.",
+                self.name, e
+            );
+
+            // ip link set <name> down
+            let _ = run_ip_cmd(&["link", "set", self.name.as_str(), "down"]);
+            // ip link del <name>
+            let _ = run_ip_cmd(&["link", "del", self.name.as_str()]);
+
+            create()?;
+        }
 
         // ip addr add <addr>/<subnet> dev <name>
         let cidr = format!("{}/{}", self.addr, self.subnet);
@@ -120,7 +134,16 @@ impl Namespace {
     }
     fn create(&self, bridge: &str, subnet: u8) -> Result<()> {
         // ip netns add <name>
-        run_ip_cmd(&["netns", "add", self.name.as_str()])?; // TODO: match error, delete existing bridge, and retry
+        let create = || run_ip_cmd(&["netns", "add", self.name.as_str()]);
+        if let Err(e) = create() {
+            // if it fails, try removing it and try again
+            warn!(
+                "Failed to create namespace {}.\nError: {}.\nTrying again.",
+                self.name, e
+            );
+            run_ip_cmd(&["netns", "del", self.name.as_str()])?;
+            create()?;
+        }
         // ip link add <veth> type veth peer name <veth_peer>
         run_ip_cmd(&[
             "link",
@@ -203,7 +226,7 @@ pub fn run_ip_cmd(args: &[&str]) -> Result<()> {
             Ok(output) => format!("ip command failed for args {:?} with:\n {}", args, output),
             Err(_) => format!("ip command failed for args {:?}", args),
         };
-        error!("{}", err_msg);
+        warn!("{}", err_msg);
         return Err(anyhow::Error::msg(err_msg));
     }
     Ok(())
