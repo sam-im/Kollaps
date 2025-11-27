@@ -28,7 +28,6 @@ pub struct Kollaps {
 
 impl Drop for Kollaps {
     fn drop(&mut self) {
-        debug!("Cleaning up processes.");
         if let Some(services) = &self.services {
             services.iter().for_each(|s| unsafe {
                 let res = libc::kill(s.pid(), libc::SIGINT);
@@ -120,10 +119,8 @@ impl Kollaps {
     }
 
     fn make_bridge(&mut self, name: &str) -> Result<Bridge> {
-        info!("Creating a virtual bridge.");
-        let addr = Ipv4Addr::from_str(&self.config.addr)
-            .context(format!("failed to parse address {}", &self.config.addr))?;
-        let bridge = Bridge::new(name, addr, self.config.subnet);
+        info!("Creating virtual bridge.");
+        let bridge = Bridge::new(name, self.config.addr, self.config.subnet);
         bridge
             .create()
             .context(format!("failed to create bridge {}", name))?;
@@ -132,7 +129,7 @@ impl Kollaps {
     }
 
     fn make_ready_services(&mut self, services: Vec<Service>) -> Result<Vec<ReadyService>> {
-        info!("Creating a namespace for each service.");
+        info!("Creating namespaces for services.");
         let mut ready_services = vec![];
         for s in services.into_iter() {
             let ns = self
@@ -148,7 +145,7 @@ impl Kollaps {
     }
 
     fn setup_tempdir(&self, services: &[ReadyService]) -> Result<()> {
-        info!("Setting up temporary directories.");
+        info!("Setting up temporary directory.");
         let mut topoinfo = String::new();
         let mut topoinfodashboard = String::new();
         services.iter().for_each(|s| {
@@ -193,7 +190,10 @@ impl Kollaps {
 
     fn make_comms(&self, service_count: usize) -> Result<Child> {
         info!("Starting communicationmanager.");
-        let stdout = File::create(format!("{}.communicationmanager.log", &self.config.logs_dir))?;
+        let stdout = File::create(format!(
+            "{}.communicationmanager.log",
+            &self.config.logs_dir
+        ))?;
         let stderr = stdout.try_clone()?;
 
         let comms = Command::new("./bin/communicationmanager")
@@ -343,23 +343,26 @@ impl Kollaps {
             .iter()
             .filter(|service| service.name() != "dashboard")
             .fold(vec![], |mut acc, service| {
-                let (stdout, stderr) =
-                    match File::create(format!("{}.emulationcore_{}.log", &self.config.logs_dir, service.id())) {
-                        Ok(stdout) => {
-                            let stderr = match stdout.try_clone() {
-                                Ok(stderr) => stderr,
-                                Err(e) => {
-                                    acc.push(Err(e));
-                                    return acc;
-                                }
-                            };
-                            (stdout, stderr)
-                        }
-                        Err(e) => {
-                            acc.push(Err(e));
-                            return acc;
-                        }
-                    };
+                let (stdout, stderr) = match File::create(format!(
+                    "{}.emulationcore_{}.log",
+                    &self.config.logs_dir,
+                    service.id()
+                )) {
+                    Ok(stdout) => {
+                        let stderr = match stdout.try_clone() {
+                            Ok(stderr) => stderr,
+                            Err(e) => {
+                                acc.push(Err(e));
+                                return acc;
+                            }
+                        };
+                        (stdout, stderr)
+                    }
+                    Err(e) => {
+                        acc.push(Err(e));
+                        return acc;
+                    }
+                };
 
                 let child = Command::new("ip")
                     .args(["netns", "exec", service.ns_name()])

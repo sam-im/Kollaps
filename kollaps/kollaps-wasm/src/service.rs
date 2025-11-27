@@ -113,7 +113,7 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     info!("Parsing topology file.");
     let topology = read_to_string(&config.topology_path).context(format!(
         "failed to read the topology file {}",
-        &config.topology_path
+        &config.topology_path.to_string_lossy()
     ))?;
     let parser = XMLGraphParser::try_new(&topology, "container".to_string())
         .context("failed to parse the topology file")?;
@@ -164,7 +164,6 @@ pub fn parse_command(command: &str, services: Vec<(String, Ipv4Addr)>) -> Vec<St
         if candidates.is_empty() {
             acc.push(arg.to_string());
         } else {
-            debug!("{} candidates for {} in {}", candidates.len(), arg, command);
             let replica_id = arg
                 .split(&format!("${}", candidates[0].0))
                 .find(|s| !s.is_empty())
@@ -184,7 +183,7 @@ pub fn parse_command(command: &str, services: Vec<(String, Ipv4Addr)>) -> Vec<St
                             arg.to_string()
                         },
                     };
-                    debug!("arg {} is replaced by {} in command", arg, subst);
+                    debug!("Argument {} in {}'s command is replaced by {}.", candidates[0].0, arg, subst);
                     acc.push(subst);
                 },
                 None => {
