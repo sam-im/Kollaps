@@ -68,7 +68,7 @@ class KubernetesBootstrapper(Bootstrapper):
 
             cmd = ["nsenter",
                     "-t", str(container_pid),
-                    "-n", "/usr/bin/emulationcore", str(container_id), str(container_pid),"kubernetes"]
+                    "-n", "/usr/bin/emulationcore", "/topology.xml", "kubernetes", str(container_id), str(container_pid)]
             emucore_instance = Popen(cmd)
         
             self.instance_count += 1

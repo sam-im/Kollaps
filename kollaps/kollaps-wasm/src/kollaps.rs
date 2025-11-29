@@ -6,7 +6,7 @@ use std::ffi::CString;
 use std::fs::File;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,25 +76,25 @@ impl Kollaps {
         self.bridge = Some(self.make_bridge("kollaps")?);
         let services = self.make_ready_services(services)?;
 
-        self.setup_tempdir(&services)?;
+        self.make_tempdir(&services)?;
         self.comms = Some(self.make_comms(services.len())?);
         self.services = Some(self.make_active_services(services)?);
         self.ecores = Some(self.make_ecores()?);
 
         // Checks if all emulationcore instances have exited.
-        let is_done = |ecores: &mut Vec<Child>| -> bool {
-            ecores.iter_mut().map(|e| e.try_wait()).all(|res| {
-                if let Ok(result) = res
-                    && let Some(exit_status) = result
+        // If it is, returns `Vec<ExitStatus>` and otherwise `None`.
+        let is_done = |ecores: &mut Vec<Child>| -> Option<Vec<ExitStatus>> {
+            let mut return_values = vec![];
+            let check = ecores.iter_mut().map(|e| e.try_wait()).all(|res| {
+                if let Ok(res) = res
+                    && let Some(exit_status) = res
                 {
-                    debug!(
-                        "An emulationcore instance exited with: {}",
-                        exit_status.to_string()
-                    );
+                    return_values.push(exit_status);
                     return true;
                 }
                 false
-            })
+            });
+            check.then_some(return_values)
         };
 
         // Sets up a signal flag to run destructors before exiting.
@@ -104,13 +104,16 @@ impl Kollaps {
                 .context("Failed to set signal handlers.")?;
         }
 
-        info!("Ready. Start the dashboard or hit CTRL+C to exit.");
+        info!("Ready. Start dashboard or hit CTRL+C to exit.");
 
         // Exits if the signal flag is set, or all ecore instances have exited.
         while !term.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(100));
-            if is_done(self.ecores.as_mut().unwrap()) {
-                info!("All emulationcore instances exited");
+
+            if let Some(return_values) = is_done(self.ecores.as_mut().unwrap()) {
+                info!("All emulationcore instances have exited.");
+                let err_count = return_values.iter().filter(|v| !v.success()).count();
+                debug!("{} instances have returned non-zero exit codes.", err_count);
                 break;
             }
         }
@@ -144,7 +147,7 @@ impl Kollaps {
         Ok(ready_services)
     }
 
-    fn setup_tempdir(&self, services: &[ReadyService]) -> Result<()> {
+    fn make_tempdir(&self, services: &[ReadyService]) -> Result<()> {
         info!("Setting up temporary directory.");
         let mut topoinfo = String::new();
         let mut topoinfodashboard = String::new();
@@ -368,10 +371,12 @@ impl Kollaps {
                     .args(["netns", "exec", service.ns_name()])
                     .args([
                         "./bin/emulationcore",
+                        &self.config.topology_path.to_string_lossy(),
+                        "-i",
+                        service.veth(),
+                        "wasm",
                         service.id(),
                         &service.pid().to_string(),
-                        "wasm",
-                        service.veth(),
                     ])
                     .stdout(stdout)
                     .stderr(stderr)

@@ -9,6 +9,7 @@ use monitor;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use subprocess::Popen;
@@ -18,11 +19,12 @@ use tracing::{debug, error, info, warn};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const TOPOLOGY_PATH: &str = "topology.xml";
-
 pub struct EmulationCore {
+    topology: PathBuf,
     id: String,
     ip: u32,
+    orchestrator: Option<Orchestrator>,
+    ifname: Option<String>,
     name: String,
     state: Arc<Mutex<State>>,
     pid: u32,
@@ -30,10 +32,7 @@ pub struct EmulationCore {
     lasttime: Option<Instant>,
     usages: Arc<Mutex<HashMap<u32, u32>>>,
     link_count: u32,
-    orchestrator: Option<Orchestrator>,
     cm_file: String,
-    topology_file: String,
-    networkdevice: Option<String>,
     shutdown: Arc<Mutex<bool>>,
     start: Arc<Mutex<bool>>,
     scheduler: Arc<Mutex<EventScheduler>>,
@@ -44,10 +43,11 @@ pub struct EmulationCore {
 
 impl EmulationCore {
     pub fn new(
+        topology: PathBuf,
         id: String,
         pid: u32,
         orchestrator: Option<Orchestrator>,
-        networkdevice: Option<String>,
+        ifname: Option<String>,
     ) -> Self {
         let state = Arc::new(Mutex::new(State::new(id.clone())));
         let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(
@@ -59,7 +59,7 @@ impl EmulationCore {
 
         // TODO consider replacing `"".to_string()` fields with Option::None instead
         Self {
-            id: id,
+            id,
             ip: 0,
             name: "".to_string(),
             state,
@@ -71,8 +71,8 @@ impl EmulationCore {
             link_count: 0,
             orchestrator,
             cm_file: "".to_string(),
-            topology_file: "".to_string(),
-            networkdevice: networkdevice,
+            topology,
+            ifname,
             shutdown: Arc::new(Mutex::new(false)),
             scheduler: eventscheduler,
             start: Arc::new(Mutex::new(false)),
@@ -85,19 +85,11 @@ impl EmulationCore {
         self.cm_file = cm_file;
     }
 
-    pub fn set_topology_file(&mut self, topology_file: String) {
-        self.topology_file = topology_file;
-    }
-
-    pub fn set_network_device(&mut self, networkdevice: String) {
-        self.networkdevice = Some(networkdevice);
-    }
-
     pub async fn init_baremetal(&mut self) {
         info!("EC {}: started boostrapping EC", self.name);
         self.state.lock().await.name = self.name.clone();
 
-        let text = std::fs::read_to_string(self.topology_file.clone()).unwrap();
+        let text = std::fs::read_to_string(self.topology.clone()).unwrap();
         let parser = XMLGraphParser::try_new(&text, "baremetal".to_string())
             .expect("topology file must be valid xml");
 
@@ -107,7 +99,7 @@ impl EmulationCore {
         self.pool_period = config.pool_period;
         self.max_age = config.max_age;
 
-        let self_addr = get_own_ip(self.networkdevice.clone());
+        let self_addr = get_own_ip(self.ifname.clone());
         initial_graph
             .set_graph_root(self_addr)
             .await
@@ -216,7 +208,7 @@ impl EmulationCore {
 
     pub async fn init(&mut self) {
         // Parse the topology
-        let text = std::fs::read_to_string(TOPOLOGY_PATH).unwrap();
+        let text = std::fs::read_to_string(self.topology.clone()).unwrap();
         let parser = XMLGraphParser::try_new(&text, "container".to_string())
             .expect("topology must be a valid xml file");
         let (config, mut initial_graph) = parser.fill_graph().await;
@@ -236,7 +228,7 @@ impl EmulationCore {
             );
         }
 
-        let self_addr = get_own_ip(self.networkdevice.clone());
+        let self_addr = get_own_ip(self.ifname.clone());
         initial_graph
             .set_graph_root(self_addr)
             .await
@@ -383,7 +375,7 @@ impl EmulationCore {
     }
 
     pub async fn setup_ebpf(&mut self) {
-        let iface = match self.networkdevice.clone() {
+        let iface = match self.ifname.clone() {
             Some(s) => s,
             None => "eth0".to_string(),
         };

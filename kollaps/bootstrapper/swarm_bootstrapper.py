@@ -149,7 +149,7 @@ class SwarmBootstrapper(Bootstrapper):
             # else:
             cmd = ["nsenter",
                     "-t", str(pid),
-                    "-n", "/usr/bin/emulationcore", str(container_id), str(pid),"docker"]
+                    "-n", "/usr/bin/emulationcore", "/topology.xml", "docker", str(container_id), str(pid)]
 
             # cmd = ["cd /Kollaps/kollaps/emulationcore/","&&","nsenter",
             #         "-t", str(pid),

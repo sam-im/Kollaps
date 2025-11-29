@@ -705,6 +705,7 @@ dependencies = [
  "capnp",
  "capnp-schemas",
  "chrono",
+ "clap",
  "docker-api",
  "hickory-client",
  "k8s-openapi",
