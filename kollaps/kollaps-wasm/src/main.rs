@@ -1,4 +1,6 @@
+mod comms;
 mod config;
+mod ecore;
 mod kollaps;
 mod network;
 mod service;

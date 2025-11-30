@@ -1,9 +1,11 @@
-use std::net::Ipv4Addr;
+use std::ptr;
 use std::str::FromStr;
+use std::{ffi::CString, net::Ipv4Addr};
 
 use crate::{config::Config, network::Namespace};
-use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
+use anyhow::{Context, Error, Result};
+use libc::{SIGSTOP, execvp, raise};
+use tracing::{debug, error, info, warn};
 
 /// Represents a service defined in a topology description file.
 #[derive(Clone, Debug)]
@@ -24,8 +26,8 @@ impl Service {
     /// - `name`: specifies a name that is used to refer to this service.
     /// - `image`: specifies the name of an executable in `PATH`.
     /// - `command`: can be optionally set to pass arguments to the executable
-    ///    specified by `image`.
-    ///    Arguments in `command` can include variables, see `parse_command`.
+    ///   specified by `image`.
+    ///   Arguments in `command` can include variables, see `parse_command`.
     pub fn new(name: String, image: String, command: Option<String>) -> Self {
         Self {
             name,
@@ -57,7 +59,7 @@ impl ReadyService {
         // Replace '_' by another character as we use it later to parse the id.
         let name = service.name.replace("_", "-");
         let addr = ns.addr().to_string().replace(".", "-");
-        let id = format!("wasm_{}_{}", name, addr);
+        let id = format!("kollaps_{}_{}", name, addr);
         Self { id, ns, service }
     }
     pub fn id(&self) -> &str {
@@ -76,18 +78,125 @@ impl ReadyService {
         &self.ns
     }
     pub fn addr(&self) -> &Ipv4Addr {
-        &self.ns.addr()
+        self.ns.addr()
     }
 }
 
+/// A struct that represents a spawned service process.
+/// Dropping this struct will kill the respective process.
 pub struct ActiveService {
     pid: i32,
     service: ReadyService,
 }
 
 impl ActiveService {
-    pub fn new(pid: i32, service: ReadyService) -> Self {
-        Self { pid, service }
+    /// Try and create a new `ActiveService` from a `ReadyService`.
+    /// It also requires `alist`, an association list of all service names and addresses,
+    /// which is used to parse variables in the `service` command.
+    pub fn try_new(
+        config: &Config,
+        service: ReadyService,
+        alist: &[(String, Ipv4Addr)],
+    ) -> Result<Self> {
+        let to_cstr = |str: &str| -> Result<CString> { Ok(CString::from_str(str)?) };
+
+        let mut cstrings = vec![
+            to_cstr("ip")?,
+            to_cstr("netns")?,
+            to_cstr("exec")?,
+            to_cstr(service.ns().name())?,
+            to_cstr(service.image())?,
+        ];
+        let service_args = match service.command() {
+            Some(args) => parse_command(args, alist),
+            None => vec![],
+        };
+        for a in service_args {
+            cstrings.push(to_cstr(&a)?)
+        }
+        let mut argv = cstrings.iter().map(|c| c.as_ptr()).collect::<Vec<_>>();
+        argv.push(ptr::null_mut());
+
+        // Using `libc::fork` we can create a child for each service that raises SIGSTOP immediately.
+        // This way we can defer the starting of runtimes to emulationcore and still have each
+        // runtime's PID beforehand.
+        let pid;
+
+        unsafe {
+            pid = libc::fork();
+            match pid {
+                0 => {
+                    debug!("{} raising SIGSTOP.", service.id());
+                    raise(SIGSTOP);
+                    debug!("{} received SIGCONT.", service.id());
+
+                    // TODO: consider running the service as non-root
+                    // 0. impl. arg for 'run service as user'
+                    // 1. check config for a username
+                    // 2. find uid
+                    // 3. setuid to that user
+
+                    // Redirects the outputs of the child to a logfile.
+                    let log_file =
+                        CString::new(format!("{}{}.log", config.logs_dir, service.id()))?;
+                    let fd = libc::open(
+                        log_file.as_ptr(),
+                        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                        0o644,
+                    );
+                    if libc::dup2(fd, libc::STDOUT_FILENO) < 0
+                        || libc::dup2(fd, libc::STDERR_FILENO) < 0
+                    {
+                        let err = std::io::Error::last_os_error();
+                        warn!(
+                            "Failed to redirect output of {} to logfile {}.\nError:\n{}",
+                            service.id(),
+                            log_file.to_string_lossy(),
+                            err
+                        );
+                    } else {
+                        libc::fcntl(libc::STDOUT_FILENO, libc::F_SETFD, 0);
+                        libc::fcntl(libc::STDERR_FILENO, libc::F_SETFD, 0);
+                        if fd > libc::STDERR_FILENO {
+                            libc::close(fd);
+                        }
+                    }
+
+                    // Replaces the current process
+                    execvp(argv[0], argv.as_ptr());
+
+                    // If the following code executes, then `exec` have failed,
+                    // and the child needs to call `std::process::exit` to avoid
+                    // running any destructors.
+                    // This can be improved by implementing a flag that is set
+                    // by the child to conditionally run destructors.
+                    let err = std::io::Error::last_os_error();
+                    error!(
+                        "Service {} failed to run {}.\nError:\n{}.",
+                        service.id(),
+                        cstrings
+                            .iter()
+                            .map(|s| s.to_string_lossy())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        err,
+                    );
+                    std::process::exit(-1);
+                }
+                pid if pid < 0 => {
+                    error!("Failed to fork service handler, error code: {}", pid);
+                    return Err(Error::msg("Failed to fork service handler."));
+                }
+                pid => {
+                    debug!(
+                        "Forked a paused process for service {} with pid: {}.",
+                        service.id(),
+                        pid
+                    );
+                }
+            }
+        }
+        Ok(ActiveService { pid, service })
     }
     pub fn pid(&self) -> i32 {
         self.pid
@@ -99,10 +208,23 @@ impl ActiveService {
         &self.service.service.name
     }
     pub fn veth(&self) -> &str {
-        &self.service.ns.veth()
+        self.service.ns.veth()
     }
     pub fn ns_name(&self) -> &str {
-        &self.service.ns.name()
+        self.service.ns.name()
+    }
+}
+
+impl Drop for ActiveService {
+    fn drop(&mut self) {
+        unsafe {
+            let res = libc::kill(self.pid(), libc::SIGINT);
+            // Handle the case where the experiment is never started and the services
+            // are still paused forks of this process that waits to spawn the actual services.
+            // Processes paused with SIGSTOP will receive SIGINT only after they are restarted.
+            let _ = libc::kill(self.pid(), libc::SIGCONT);
+            debug!("Sent SIGINT to service {}, result was {}", self.name(), res);
+        }
     }
 }
 
@@ -151,7 +273,7 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
 /// of the respective service.
 /// Such a variable can optionally include a suffix for a replica index number to allow choosing a specific instance
 /// of the same service.
-pub fn parse_command(command: &str, services: Vec<(String, Ipv4Addr)>) -> Vec<String> {
+fn parse_command(command: &str, services: &[(String, Ipv4Addr)]) -> Vec<String> {
     command.split_whitespace().fold(vec![], |mut acc, arg| {
         let candidates: Vec<&(String, Ipv4Addr)> = services
             .iter()

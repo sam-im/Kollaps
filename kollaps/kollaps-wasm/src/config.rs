@@ -42,9 +42,11 @@ impl Default for Config {
 
 impl From<Args> for Config {
     fn from(args: Args) -> Self {
-        let mut config = Config::default();
+        let mut config = Config {
+            topology_path: args.topology,
+            ..Default::default()
+        };
 
-        config.topology_path = args.topology;
         if let Some(addr) = args.addr {
             config.addr = addr;
         }
