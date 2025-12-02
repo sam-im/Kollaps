@@ -1,12 +1,4 @@
 [submodule "kollaps/TCAL/libutc"]
 	path = kollaps/TCAL/libutc
 	url = https://github.com/miguelammatos/libutc
-	
-[submodule "kollaps/communicationmanager/libc"]
-	path = kollaps/communicationmanager/libc
-	url = https://github.com/sebastiaoamaro/libc
-
-[submodule "kollaps/communicationcore/redbpf"]
-	path = kollaps/communicationcore/redbpf
-	url = https://github.com/sebastiaoamaro/redbpf
 
