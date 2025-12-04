@@ -9,7 +9,7 @@ members = [
     "monitor-ebpf",
     "emulationcore",
     "controller",
-    "kollaps-wasm",
+    "kollaps-wasm", "kollaps-wasm-runtime",
 ]
 
 # do not add monitor-ebpf to default-members or it won't compile

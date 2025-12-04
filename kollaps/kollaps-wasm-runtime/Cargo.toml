@@ -1,0 +1,12 @@
+[package]
+name = "kollaps-wasm-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100" # error handling
+clap = { version = "4.5.53", features = ["derive"] } # argument parsing
+tracing = "0.1.43" # logging
+tracing-subscriber = "0.3.22" # logging
+wasmtime = "39.0.1" # wasi runtime
+wasmtime-wasi = "39.0.1" # wasi runtime
