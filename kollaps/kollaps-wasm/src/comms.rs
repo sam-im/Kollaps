@@ -14,9 +14,9 @@ pub struct CommunicationManager {
 
 impl CommunicationManager {
     pub fn try_new(config: &Config, service_count: usize) -> Result<Self> {
-        let stdout = File::create(format!("{}.communicationmanager.log", config.logs_dir))?;
+        let stdout = File::create(config.logs_dir.join(".communicationmanager.txt"))?;
 
-        let child = Command::new("./bin/communicationmanager")
+        let child = Command::new(config.executables_dir.join("communicationmanager"))
             .arg(service_count.to_string())
             .stdout(stdout.try_clone()?)
             .stderr(stdout)

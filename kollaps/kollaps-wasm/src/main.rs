@@ -46,4 +46,8 @@ struct Args {
     /// Sets a custom subnet mask in CIDR notation.
     #[arg(long)]
     subnet: Option<u8>,
+    /// Allow the specified directory to be accessible within
+    /// the default runtime's working directory.
+    #[arg(long)]
+    allow_dir: Option<PathBuf>,
 }

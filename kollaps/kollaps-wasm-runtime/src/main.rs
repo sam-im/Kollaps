@@ -18,10 +18,10 @@ fn main() -> Result<()> {
         .finish();
     subscriber::set_global_default(subscriber)?;
 
-    let args = Args::parse();
+    let config = Args::parse();
 
     info!("Starting WASI runtime.");
-    match Runtime::from(args).run() {
+    match Runtime::from(config).run() {
         Ok(_) => info!("Exiting."),
         Err(e) => error!("Failed to run the runtime, reason: {}", e),
     }
@@ -31,8 +31,10 @@ fn main() -> Result<()> {
 #[derive(Parser)]
 struct Args {
     /// Specifies a path to a WASM module.
-    path: PathBuf,
-    /// Maps a directory on the host as the current directory in the runtime.
+    wasm_path: PathBuf,
+    /// Optionally map a directory in the host as the current directory in the runtime.
     #[arg(long)]
-    dir: Option<PathBuf>,
+    opt_dir: Option<PathBuf>,
+    /// List of arguments that will be passed to the WASM module.
+    wasm_args: Vec<String>,
 }

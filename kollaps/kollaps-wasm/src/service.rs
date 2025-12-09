@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 pub struct Service {
     /// Symbolic name in topology.
     name: String,
-    /// Executable name.
+    /// Executable name in PATH or a WASM module.
     image: String,
     /// Any arguments to be passed to executable.
     command: Option<String>,
@@ -24,7 +24,7 @@ impl Service {
     ///
     /// Arguments:
     /// - `name`: specifies a name that is used to refer to this service.
-    /// - `image`: specifies the name of an executable in `PATH`.
+    /// - `image`: specifies the name of an executable in `PATH` or a WASM module.
     /// - `command`: can be optionally set to pass arguments to the executable
     ///   specified by `image`.
     ///   Arguments in `command` can include variables, see `parse_command`.
@@ -91,8 +91,8 @@ pub struct ActiveService {
 
 impl ActiveService {
     /// Try and create a new `ActiveService` from a `ReadyService`.
-    /// It also requires `alist`, an association list of all service names and addresses,
-    /// which is used to parse variables in the `service` command.
+    /// The argument `alist` is an association list of all the service names and addresses,
+    /// used to parse variables in the `service` command.
     pub fn try_new(
         config: &Config,
         service: ReadyService,
@@ -105,8 +105,25 @@ impl ActiveService {
             to_cstr("netns")?,
             to_cstr("exec")?,
             to_cstr(service.ns().name())?,
-            to_cstr(service.image())?,
         ];
+
+        // If the image tag is a WASM module, run it with our default runtime.
+        if service.image().ends_with(".wasm") {
+            cstrings.push(to_cstr(
+                &config
+                    .executables_dir
+                    .join("kollaps-wasm-runtime")
+                    .to_string_lossy(),
+            )?);
+            cstrings.push(to_cstr(service.image())?);
+            if let Some(allow_dir) = &config.allow_dir {
+                cstrings.push(to_cstr("--dir")?);
+                cstrings.push(to_cstr(&allow_dir.to_string_lossy())?);
+            }
+        } else {
+            cstrings.push(to_cstr(service.image())?);
+        }
+
         let service_args = match service.command() {
             Some(args) => parse_command(args, alist),
             None => vec![],
@@ -137,8 +154,14 @@ impl ActiveService {
                     // 3. setuid to that user
 
                     // Redirects the outputs of the child to a logfile.
-                    let log_file =
-                        CString::new(format!("{}{}.log", config.logs_dir, service.id()))?;
+                    let log_file = CString::new(
+                        config
+                            .logs_dir
+                            .join(format!("{}.txt", service.id()))
+                            .to_string_lossy()
+                            .as_bytes(),
+                    )?;
+                    // CString::new(format!("{}{}.log", config.logs_dir, service.id()))?;
                     let fd = libc::open(
                         log_file.as_ptr(),
                         libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
@@ -228,6 +251,7 @@ impl Drop for ActiveService {
     }
 }
 
+/// Uses emulationcore::XMLGraphParser to parse a topology file, returning a vector of `Service`s.
 pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     use emulationcore::xmlgraphparser::XMLGraphParser;
     use std::fs::read_to_string;
@@ -267,12 +291,12 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     Ok(services)
 }
 
-// TODO: include an example
 /// Parses a command and returns a vector containing arguments to be used as an argv for a service process.
 /// An argument that starts with a '$' and is a service name designates a variable to be replaced by the address
 /// of the respective service.
 /// Such a variable can optionally include a suffix for a replica index number to allow choosing a specific instance
-/// of the same service.
+/// of the replicated service.
+/// Example: The arguments "-c $server" may be returned as "-c 10.10.10.5".
 fn parse_command(command: &str, services: &[(String, Ipv4Addr)]) -> Vec<String> {
     command.split_whitespace().fold(vec![], |mut acc, arg| {
         let candidates: Vec<&(String, Ipv4Addr)> = services
@@ -305,7 +329,7 @@ fn parse_command(command: &str, services: &[(String, Ipv4Addr)]) -> Vec<String> 
                             arg.to_string()
                         },
                     };
-                    debug!("Argument {} in {}'s command is replaced by {}.", candidates[0].0, arg, subst);
+                    debug!("Argument {} in command {} is replaced by {}.", arg, command, subst);
                     acc.push(subst);
                 },
                 None => {

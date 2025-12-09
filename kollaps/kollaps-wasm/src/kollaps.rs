@@ -7,6 +7,7 @@ use crate::service::{ActiveService, ReadyService, Service, parse_services};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
@@ -136,19 +137,25 @@ impl Kollaps {
         fs::File::create(&self.config.remote_ips_path)
             .context("failed to create empty remote_ips file in temp dir")?;
 
-        let debug = |path: &str, content: &str| {
-            debug!("\nWrote\n-----\n{}\n-----\nto {}.", path, content);
+        let debug = |path: &PathBuf, content: &str| {
+            debug!(
+                "\nWrote\n-----\n{}\n-----\nto {}.",
+                content,
+                path.to_string_lossy(),
+            );
         };
 
-        fs::write(&self.config.topoinfo_path, &topoinfo)
-            .context(format!("failed to write to {}", &self.config.topoinfo_path))?;
-        debug(&topoinfo, &self.config.topoinfo_path);
+        fs::write(&self.config.topoinfo_path, &topoinfo).context(format!(
+            "failed to write to {:?}",
+            &self.config.topoinfo_path
+        ))?;
+        debug(&self.config.topoinfo_path, &topoinfo);
 
         fs::write(&self.config.topoinfodashboard_path, &topoinfodashboard).context(format!(
-            "failed to write to {}",
+            "failed to write to {:?}",
             &self.config.topoinfodashboard_path
         ))?;
-        debug(&topoinfodashboard, &self.config.topoinfodashboard_path);
+        debug(&self.config.topoinfodashboard_path, &topoinfodashboard);
 
         Ok(())
     }

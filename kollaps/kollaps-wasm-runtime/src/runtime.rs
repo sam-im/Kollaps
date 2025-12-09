@@ -1,7 +1,5 @@
 use crate::Args;
 
-use std::path::PathBuf;
-
 use tracing::{debug, warn};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::*;
@@ -9,26 +7,25 @@ use wasmtime_wasi::p2::bindings::sync::Command;
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 pub struct Runtime {
-    /// Path to the WASM module.
-    module: PathBuf,
-    /// Optionnaly allow a directory on the host to be accessible
-    /// at the current directory in the WASM module.
-    dir: Option<PathBuf>,
+    args: Args,
 }
 
 impl From<Args> for Runtime {
     fn from(value: Args) -> Self {
-        Self {
-            module: value.path,
-            dir: value.dir,
-        }
+        Self { args: value }
     }
 }
 
 impl Runtime {
-    /// Initialize a wasmtime runtime with networking enabled and run the `module`.
-    /// Optionally allowing a directory to be accessible as well.
+    /// Initializes a wasmtime runtime and runs the wasm module with it.`.
     pub fn run(&self) -> Result<()> {
+        let prog_name = &self
+            .args
+            .wasm_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("wasm-module");
+
         // Define the WASI functions globally on the `Config`.
         let engine = Engine::default();
         let mut linker = Linker::new(&engine);
@@ -40,26 +37,32 @@ impl Runtime {
         let mut wasi_builder = WasiCtx::builder();
         wasi_builder
             .inherit_stdio()
-            .inherit_args()
-            .inherit_network();
-        if let Some(path) = &self.dir {
-            debug!("Opening directory {} with default permissions.", path.to_string_lossy());
+            .inherit_network()
+            .arg(prog_name)
+            .args(&self.args.wasm_args);
+
+        if let Some(path) = &self.args.opt_dir {
+            debug!(
+                "Opening directory {} with default permissions.",
+                path.to_string_lossy()
+            );
             wasi_builder.preopened_dir(path, ".", DirPerms::all(), FilePerms::all())?;
         }
-        let wasi = wasi_builder.build();
+
+        let wasi_ctx = wasi_builder.build();
 
         let state = ComponentRunStates {
-            wasi_ctx: wasi,
+            wasi_ctx,
             resource_table: ResourceTable::new(),
         };
         let mut store = Store::new(&engine, state);
 
         // Instantiate our component with the imports we've created, and run it.
-        let component = Component::from_file(&engine, &self.module)?;
+        let component = Component::from_file(&engine, &self.args.wasm_path)?;
         let command = Command::instantiate(&mut store, &component, &linker)?;
         let program_result = command.wasi_cli_run().call_run(&mut store)?;
         if program_result.is_err() {
-            warn!("WASM module exited with an error.");
+            warn!("{} exited with an error.", prog_name);
         }
         Ok(())
     }

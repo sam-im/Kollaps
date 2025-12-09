@@ -22,6 +22,7 @@ default-members = [
     "emulationcore",
     "controller",
     "kollaps-wasm",
+    "kollaps-wasm-runtime"
 ]
 
 # included by aya-rs project template

@@ -3,7 +3,7 @@ use std::io::{copy, sink};
 use std::net::TcpListener;
 
 fn main() {
-    eprintln!("Starting client.");
+    eprintln!("Starting server.");
     let mut args = args();
     let _prog = args.next();
     let port = args

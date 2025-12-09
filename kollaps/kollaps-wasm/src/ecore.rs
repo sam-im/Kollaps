@@ -1,3 +1,5 @@
+use crate::{config::Config, service::ActiveService};
+
 use std::{
     fs::File,
     process::{Child, Command},
@@ -5,8 +7,6 @@ use std::{
 
 use anyhow::Result;
 use tracing::debug;
-
-use crate::{config::Config, service::ActiveService};
 
 /// Represents a running Emulationcore instance.
 /// Dropping this struct will kill the respective process.
@@ -20,13 +20,18 @@ pub struct EmulationCore {
 impl EmulationCore {
     /// Try to spawn an emulationcore process, returning self if successful.
     pub fn try_new(config: &Config, service: &ActiveService) -> Result<Self> {
-        let logs_dir = format!("{}.emulationcore_{}.txt", config.logs_dir, service.id());
+        let logs_dir = &config
+            .logs_dir
+            .join(format!(".emulationcore_{}.txt", service.id()));
         let stdout = File::create(logs_dir)?;
         let child = Command::new("ip")
             .args(["netns", "exec", service.ns_name()])
             .args([
-                "./bin/emulationcore",
-                &config.topology_path.to_string_lossy(),
+                &config
+                    .executables_dir
+                    .join("emulationcore")
+                    .to_string_lossy(),
+                &config.topology_path.canonicalize()?.to_string_lossy(),
                 "-i",
                 service.veth(),
                 "wasm",
@@ -35,6 +40,7 @@ impl EmulationCore {
             ])
             .stdout(stdout.try_clone()?)
             .stderr(stdout)
+            .current_dir(&config.executables_dir.parent().unwrap())
             .spawn()?;
 
         let service_id = service.id().to_owned();
