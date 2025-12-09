@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<experiment boot="kollaps:2.0">
+    <!-- For information about the topology file format, refer to Kollaps documentation.
+         This topology description essentially imitates `examples/iperf3/dynamic.xml` -->
+	<services>
+        <!-- symbolic entry for the dashboard, only `name` have to be equal to "dashboard" -->
+		<service name="dashboard" image="dashboard" supervisor="true" port="8088"/>
+        <!-- There are two differences in how services are defined:
+             1. the image tag can be set to either a path to a WASM module (file ending with ".wasm") or an executable.
+             2. the command tag represents the arguments given to the this module
+
+             The arguments in command can include variables that represents the IPv4 address of a particular service.
+
+             Variables start with a `$` sign, and are followed by the name of a service, e.g. `$client1`.
+
+             They can optionally end with a replica ID number if the associated service is a replicated one.
+             e.g. `server` service below has 3 replicas in total, to target the first one we would use `$server1`. -->
+		<service name="client1" image="simple-client.wasm" command="$server1 3030"/>
+		<service name="client2" image="simple-client.wasm" command="$server2 3030"/>
+		<service name="client3" image="simple-client.wasm" command="$server3 3030"/>
+	    <service name="server" image="simple-server.wasm" command="3030" share="false"/>
+	</services>
+	<bridges>
+        <bridge name="s1"/>
+        <bridge name="s2"/>
+	</bridges>
+    <links>
+        <link origin="client1" dest="s1" latency="10" upload="100Mbps" download="100Mbps" network="kollaps_network"/>
+        <link origin="client2" dest="s1" latency="10" upload="100Mbps" download="100Mbps" network="kollaps_network"/>
+        <link origin="client3" dest="s1" latency="10" upload="100Mbps" download="100Mbps" network="kollaps_network"/>
+
+        <link origin="s1" dest="s2" latency="10" upload="60Mbps" download="60Mbps" network="kollaps_network"/>
+        <link origin="s2" dest="server" latency="5" upload="100Mbps" download="100Mbps" network="kollaps_network"/>
+    </links>
+	<dynamic>
+		<schedule name="client1" time="0.0" action="join"/>
+		<schedule name="client2" time="0.0" action="join"/>
+		<schedule name="client3" time="0.0" action="join"/>
+
+		<schedule name="server" time="0.0" action="join" amount="3"/>
+
+		<schedule origin="client1" dest="s1" time="5.0" latency="10" upload="5Mbps" download="100Mbps"/>
+        <schedule origin="client2" dest="s1" time="15.0" latency="10" upload="5Mbps" download="100Mbps"/>
+        <schedule origin="client3" dest="s1" time="25.0" latency="10" upload="5Mbps" download="100Mbps"/>
+
+		<schedule origin="s1" dest="s2" time="35.0" upload="5Mbps" download="5Mbps"/>
+
+		<schedule origin="client3" dest="s1" time="45.0" action="leave"/>
+
+		<schedule name="client1" time="60.0" action="leave"/>
+		<schedule name="client2" time="70.0" action="leave"/>
+		<schedule name="client3" time="80.0" action="crash"/>
+
+		<schedule name="server"  time="120.0" action="leave" amount="3"/>
+	</dynamic>
+</experiment>
