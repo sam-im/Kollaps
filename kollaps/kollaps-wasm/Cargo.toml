@@ -1,0 +1,16 @@
+[package]
+name = "kollaps-wasm"
+description = "Run single-host Kollaps experiments."
+license = "GPL-3.0 OR Apache-2.0"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100" # error handling
+clap = { version = "4.5.53", features = ["derive"] } # argument parsing
+emulationcore = { path = "../emulationcore" } # kollaps topology parser
+libc = "0.2.177" # forks, and some signal handling
+signal-hook = "0.3.18" # signal handling, and termination
+tokio = { version = "1.46.1", features = ["full"] } # required by emulationcore
+tracing = "0.1.41" # logging
+tracing-subscriber = "0.3.20" # logging

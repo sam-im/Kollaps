@@ -48,7 +48,8 @@ class KubernetesBootstrapper(Bootstrapper):
             container_pid = self.low_level_client.inspect_container(container_id)["State"]["Pid"]
             self.add_dashboard_id_container(container_id)
         
-            cmd = ["nsenter", "-t", str(container_pid), "-n", "/usr/bin/python3", "/usr/local/bin/KollapsDashboard", TOPOLOGY,str(container_id),str(container_pid)]
+            cmd = ["nsenter", "-t", str(container_pid), "-n", "/usr/bin/python3", "/usr/local/bin/KollapsDashboard",
+                   "container", TOPOLOGY, str(container_id), str(container_pid)]
             dashboard_instance = Popen(cmd)
         
             self.instance_count += 1
@@ -67,7 +68,7 @@ class KubernetesBootstrapper(Bootstrapper):
 
             cmd = ["nsenter",
                     "-t", str(container_pid),
-                    "-n", "/usr/bin/emulationcore", str(container_id), str(container_pid),"kubernetes"]
+                    "-n", "/usr/bin/emulationcore", "/topology.xml", "kubernetes", str(container_id), str(container_pid)]
             emucore_instance = Popen(cmd)
         
             self.instance_count += 1
@@ -82,6 +83,8 @@ class KubernetesBootstrapper(Bootstrapper):
         print_named("Bootstrapper", "Kubernetes bootstrapping started...")
         print_named("Bootstrapper", "bootstrapping all containers with label " + label + ".")
         
+        self.make_tmp_dir()
+
         god_id = None  # get this, it will be argv[3]
         while not god_id:
             kollaps_pods = self.high_level_client.list_namespaced_pod('default')

@@ -18,15 +18,21 @@
 import socket
 import random
 
-from os import getenv
+from os import getenv, mkdir
 from subprocess import Popen
 from multiprocessing import Process
 from time import sleep
 
 from kollaps.tools.utils import int2ip, ip2int
 from kollaps.tools.utils import print_error, print_and_fail, print_named, print_error_named
-from kollaps.tools.utils import LOCAL_IPS_FILE, REMOTE_IPS_FILE, GOD_IPS_SHARE_PORT
+from kollaps.tools.utils import GOD_IPS_SHARE_PORT
 
+TMP = "/tmp/kollaps/"
+PIPES = f"{TMP}pipes/"
+TOPOINFO = f"{TMP}topoinfo"
+TOPOINFODASHBOARD = f"{TMP}topoinfodashboard"
+REMOTE_IPS = f"{TMP}remote_ips.txt"
+LOCAL_IPS = f"{TMP}local_ips.txt" # consider removing, doesn't seem to be used
 
 class Bootstrapper(object):
     
@@ -48,14 +54,17 @@ class Bootstrapper(object):
         self.high_level_client = high_level_client
         self.low_level_client = low_level_client
         
+    def make_tmp_dir(self):
+        mkdir(TMP)
+        mkdir(PIPES)
 
     def start_rust_handler(self,containercount):
         if getenv('RUNTIME_EMULATION', 'true') != 'false':
             try:
                 #creates files and start manager
-                open("/file.lock","x")
-                open("/tmp/topoinfo","x")
-                open("/tmp/topoinfodashboard","x")
+                open("/file.lock","x") # consider removing, doesn't seem to be used
+                open(TOPOINFO,"x")
+                open(TOPOINFODASHBOARD,"x")
                 cmd = ["/usr/bin/communicationmanager",str(containercount),"0.0.0.0"]
                 self.rust_handler = Popen(cmd)
                 print_named("god", "started rust handler.")
@@ -67,13 +76,13 @@ class Bootstrapper(object):
     #add container id to file
     def add_id_container(self,id):
         print_named("god","writing id" + id)
-        file = open("/tmp/topoinfo", "a")
+        file = open(TOPOINFO, "a")
         file.write(id+"\n")
         file.close()
 
     #add the id of the dashboard
     def add_dashboard_id_container(self,id):
-        file= open("/tmp/topoinfodashboard", "a")
+        file= open(TOPOINFODASHBOARD, "a")
         file.write(id+"\n")
         file.close()
             
@@ -167,21 +176,21 @@ class Bootstrapper(object):
             
             
             # write all known IPs to a file to be read from c++ lib if necessary
-            with open(LOCAL_IPS_FILE, 'a') as locals_file:
+            with open(LOCAL_IPS, 'a') as locals_file:
                 locals_file.write(str(own_ip_int))
     
-            with open(REMOTE_IPS_FILE, 'a') as remotes_file:
+            with open(REMOTE_IPS, 'a') as remotes_file:
                 for god in self.gods:
                     remotes_file.write(str(god) + "\n")
                     
             known_ips = ""
-            with open(LOCAL_IPS_FILE, 'r') as file:
+            with open(LOCAL_IPS, 'r') as file:
                 known_ips += "local IP: "
                 for line in file.readlines():
                     known_ips += int2ip(int(line.strip())) + ", "
             
             known_ips += "\n           "
-            with open(REMOTE_IPS_FILE, 'r') as file:
+            with open(REMOTE_IPS, 'r') as file:
                 known_ips += "remote IPs: "
                 for line in file.readlines():
                     known_ips += int2ip(int(line.strip())) + ", "

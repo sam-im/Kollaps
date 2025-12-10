@@ -14,15 +14,12 @@
 // limitations under the License.
 
 use crate::elements::Service;
-use std::process;
 use std::sync::Arc;
-use std::thread;
-use std::time;
 use subprocess::Popen;
 use subprocess::PopenConfig;
 use subprocess::Redirection;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::info;
 
 pub fn convert_to_int(octets: [u8; 4]) -> u32 {
     return ((octets[0] as u32) << 24)
@@ -77,16 +74,6 @@ impl Dijkstraentry {
             node: node,
         }
     }
-}
-
-// TODO consider inlining, that way tracing will also point to the module
-// the error has occured, or better yet use the panic macro
-pub fn print_and_fail(message: String) {
-    error!("{}", message);
-    let sleeptime = time::Duration::from_millis(500);
-    thread::sleep(sleeptime);
-
-    process::exit(0);
 }
 
 pub fn start_script(script: String) {

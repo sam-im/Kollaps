@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use tracing::{error, info};
+use tracing::debug;
 
 use crate::aux::print_message;
 use crate::elements::{Flowu16, Link, Path};
@@ -271,7 +271,7 @@ impl State {
 
     //Increments the age and updates the new structures with older emulation metadata
     pub async fn increment_age(&mut self) {
-        info!("EC {}: started changing properties", self.name);
+        debug!("EC {}: started changing properties", self.name);
         self.path_changes().await;
         self.collect_old_usages().await;
 
@@ -713,8 +713,7 @@ impl State {
                 return link.clone();
             }
             None => {
-                error!("EC {}: link {} does not exist", self.name, id);
-                std::process::exit(0);
+                panic!("EC {}: link {} does not exist", self.name, id);
             }
         };
     }

@@ -9,18 +9,22 @@ use monitor;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use subprocess::Popen;
 use subprocess::PopenConfig;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct EmulationCore {
+    topology: PathBuf,
     id: String,
     ip: u32,
+    orchestrator: Option<Orchestrator>,
+    ifname: Option<String>,
     name: String,
     state: Arc<Mutex<State>>,
     pid: u32,
@@ -28,10 +32,7 @@ pub struct EmulationCore {
     lasttime: Option<Instant>,
     usages: Arc<Mutex<HashMap<u32, u32>>>,
     link_count: u32,
-    orchestrator: Option<Orchestrator>,
     cm_file: String,
-    topology_file: String,
-    networkdevice: Option<String>,
     shutdown: Arc<Mutex<bool>>,
     start: Arc<Mutex<bool>>,
     scheduler: Arc<Mutex<EventScheduler>>,
@@ -41,7 +42,13 @@ pub struct EmulationCore {
 }
 
 impl EmulationCore {
-    pub fn new(id: String, pid: u32, orchestrator: Option<Orchestrator>) -> Self {
+    pub fn new(
+        topology: PathBuf,
+        id: String,
+        pid: u32,
+        orchestrator: Option<Orchestrator>,
+        ifname: Option<String>,
+    ) -> Self {
         let state = Arc::new(Mutex::new(State::new(id.clone())));
         let eventscheduler = Arc::new(Mutex::new(EventScheduler::new(
             state.clone(),
@@ -52,7 +59,7 @@ impl EmulationCore {
 
         // TODO consider replacing `"".to_string()` fields with Option::None instead
         Self {
-            id: id,
+            id,
             ip: 0,
             name: "".to_string(),
             state,
@@ -64,8 +71,8 @@ impl EmulationCore {
             link_count: 0,
             orchestrator,
             cm_file: "".to_string(),
-            topology_file: "".to_string(),
-            networkdevice: None,
+            topology,
+            ifname,
             shutdown: Arc::new(Mutex::new(false)),
             scheduler: eventscheduler,
             start: Arc::new(Mutex::new(false)),
@@ -78,19 +85,11 @@ impl EmulationCore {
         self.cm_file = cm_file;
     }
 
-    pub fn set_topology_file(&mut self, topology_file: String) {
-        self.topology_file = topology_file;
-    }
-
-    pub fn set_network_device(&mut self, networkdevice: String) {
-        self.networkdevice = Some(networkdevice);
-    }
-
     pub async fn init_baremetal(&mut self) {
         info!("EC {}: started boostrapping EC", self.name);
         self.state.lock().await.name = self.name.clone();
 
-        let text = std::fs::read_to_string(self.topology_file.clone()).unwrap();
+        let text = std::fs::read_to_string(self.topology.clone()).unwrap();
         let parser = XMLGraphParser::try_new(&text, "baremetal".to_string())
             .expect("topology file must be valid xml");
 
@@ -100,7 +99,7 @@ impl EmulationCore {
         self.pool_period = config.pool_period;
         self.max_age = config.max_age;
 
-        let self_addr = get_own_ip(self.networkdevice.clone());
+        let self_addr = get_own_ip(self.ifname.clone());
         initial_graph
             .set_graph_root(self_addr)
             .await
@@ -209,7 +208,7 @@ impl EmulationCore {
 
     pub async fn init(&mut self) {
         // Parse the topology
-        let text = std::fs::read_to_string("/topology.xml".to_string()).unwrap();
+        let text = std::fs::read_to_string(self.topology.clone()).unwrap();
         let parser = XMLGraphParser::try_new(&text, "container".to_string())
             .expect("topology must be a valid xml file");
         let (config, mut initial_graph) = parser.fill_graph().await;
@@ -219,13 +218,17 @@ impl EmulationCore {
         self.max_age = config.max_age;
 
         // Get ips of all containers
-        info!("EC {} - retrieving container IPs", self.name);
         tokio::time::sleep(Duration::from_secs(2)).await;
         if let Some(o) = &self.orchestrator {
-            let _ = o.resolve_hostnames(&mut initial_graph).await;
+            let res = o.resolve_hostnames(&mut initial_graph).await;
+            debug!(
+                "resolved {} addresses, returned result was {:?}",
+                initial_graph.services.keys().len(),
+                res
+            );
         }
 
-        let self_addr = get_own_ip(self.networkdevice.clone());
+        let self_addr = get_own_ip(self.ifname.clone());
         initial_graph
             .set_graph_root(self_addr)
             .await
@@ -314,25 +317,27 @@ impl EmulationCore {
 
     pub async fn start_cm(&mut self, service_count: usize) -> Popen {
         // Create auxiliary files, CM reads from these files, dashboard is not relevant we just create an empty file
+        let _ = std::fs::create_dir("/tmp/kollaps/");
+        let _ = std::fs::create_dir("/tmp/kollaps/pipes/");
         OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/tmp/topoinfodashboard")
+            .truncate(true)
+            .open("/tmp/kollaps/topoinfodashboard")
             .unwrap();
 
         let mut topoinfo = OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/tmp/topoinfo")
+            .truncate(true)
+            .open("/tmp/kollaps/topoinfo")
             .unwrap();
 
         let mut remote_ips = OpenOptions::new()
             .write(true)
             .create(true)
-            .append(true)
-            .open("/remote_ips.txt")
+            .truncate(true)
+            .open("/tmp/kollaps/remote_ips.txt")
             .unwrap();
 
         for (ip, _) in self
@@ -370,7 +375,7 @@ impl EmulationCore {
     }
 
     pub async fn setup_ebpf(&mut self) {
-        let iface = match self.networkdevice.clone() {
+        let iface = match self.ifname.clone() {
             Some(s) => s,
             None => "eth0".to_string(),
         };

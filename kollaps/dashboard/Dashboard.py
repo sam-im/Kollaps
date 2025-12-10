@@ -156,7 +156,7 @@ def links_state():
             maximum_bandwidth = DashboardState.graph.links[link].bandwidth_bps
             DashboardState.link_error[link] = ((maximum_bandwidth-bandwidth)/maximum_bandwidth)*100
             print("max_bw: " + str(maximum_bandwidth) + " and " + " bw" + str(bandwidth) + " in link " + str(link))
-        if DashboardState.mode == "container":
+        if DashboardState.mode != "baremetal":
             answer = render_template('links_state.html', link_error=DashboardState.link_error, graph=DashboardState.graph)
         for link in DashboardState.links:
             DashboardState.links[link] = {}
@@ -348,12 +348,66 @@ def startExperiment():
 
 
 def resolve_hostnames():
-
-
     experimentUUID = environ.get('KOLLAPS_UUID', '')
-    
     orchestrator = getenv('KOLLAPS_ORCHESTRATOR', 'swarm')
-    if orchestrator == 'kubernetes':
+
+    if DashboardState.mode == 'wasm':
+        TOPOINFO = "/tmp/kollaps/topoinfo"
+        TOPOINFODASHBOARD = "/tmp/kollaps/topoinfodashboard"
+
+        def read_name_addr_pairs():
+            def parse_name(id_str):
+                parts = id_str.split('_')
+                return parts[-2] if len(parts) >= 2 else None
+
+            def parse_addr(id_str):
+                last = id_str.split('_')[-1] if id_str else None
+                return last.replace('-', '.') if last else None
+
+            content = ""
+            try:
+                with open(TOPOINFO, 'r') as f:
+                    content = f.read()
+            except Exception:
+                print(f"failed to read {TOPOINFO}")
+            try:
+                with open(TOPOINFODASHBOARD, 'r') as f:
+                    content += f.read()
+            except Exception:
+                print(f"failed to read {TOPOINFODASHBOARD}")
+
+
+            lines = [l.strip() for l in content.splitlines() if l.strip()]
+            pairs = []
+            for id_line in lines:
+                name = parse_name(id_line)
+                addr = parse_addr(id_line)
+                if name and addr:
+                    pairs.append((name, addr))
+            return pairs
+
+        name_addr_pairs = read_name_addr_pairs()
+
+        for service in DashboardState.graph.services:
+            hosts = DashboardState.graph.services[service]
+            ips = []
+            for (name, addr) in name_addr_pairs:
+                if name == service:
+                    ips.append(addr)
+    
+            for i in range(len(hosts)):
+                hosts[i].ip = ip2int(ips[i])
+    
+            for i, host in enumerate(hosts):
+                if host.supervisor:
+                    continue
+
+                with DashboardState.lock:
+                    DashboardState.hosts[host].ip = ips[i]
+                    DashboardState.hosts[host].status = 'Pending'
+
+
+    elif orchestrator == 'kubernetes':
         config.load_incluster_config()
         kubeAPIInstance = client.CoreV1Api()
         need_pods = kubeAPIInstance.list_namespaced_pod('default')
@@ -431,12 +485,12 @@ def resolve_hostnames():
 
 
 
-def start_rust():
+def start_rust(id):
     link_count = len(DashboardState.graph.links)
 
     if DashboardState.graph.root is None:
         print_named("dashboard","STARTED RUST")
-        libcommunicationcore.start(CONTAINER.id,"dashboard",0,link_count)
+        libcommunicationcore.start(id, "dashboard", 0, link_count)
     
     
     # if link_count <= BYTE_LIMIT:
@@ -450,8 +504,8 @@ def start_rust():
     libcommunicationcore.register_communicationmanager(RustComms(collect_flow))
     libcommunicationcore.start_polling_u16()
 
-def query_until_ready():
-    start_rust()
+def query_until_ready(id):
+    start_rust(id)
     resolve_hostnames()
     print_named("Dashboard", "resolved all hostnames.")
     pending_nodes = []
@@ -535,8 +589,7 @@ def add_dashboard_id(id):
         file.write(id+"\n")
         file.close()
 
-def baremetal_deployment():
-    topology_file = sys.argv[1]
+def baremetal_deployment(topology_file):
     DashboardState.mode = "baremetal"
     DashboardState.topology_file = topology_file
     graph = NetGraph()
@@ -568,12 +621,9 @@ def baremetal_deployment():
         
     app.run(host='0.0.0.0', port=8088)
 
-def container_deployment():
-    
-    topology_file = "/topology.xml"
-
+def container_deployment(topology_file, id, pid):
     DashboardState.mode = "container"
-    setup_container(sys.argv[2], sys.argv[3])
+    setup_container(id, pid)
     graph = NetGraph()
     XMLGraphParser(topology_file, graph,"container").fill_graph()
 
@@ -590,18 +640,54 @@ def container_deployment():
         DashboardState.links[link.index] = {}
     
     if getenv('RUNTIME_EMULATION', 'true') != 'false':
-        startup_thread = Thread(target=query_until_ready)
+        startup_thread = Thread(target=query_until_ready, args=[CONTAINER.id])
         startup_thread.daemon = True
         startup_thread.start()
         
     app.run(host='0.0.0.0', port=8088)
 
-def main():
-    if len(sys.argv) == 2:
-         baremetal_deployment()
-    else:
-         container_deployment()
-    return 
+def wasm_deployment(topology_file):
+    DashboardState.mode = "wasm"
+    graph = NetGraph()
+    XMLGraphParser(topology_file, graph, "container").fill_graph()
+    with DashboardState.lock:
+        for service in graph.services:
+            for i, host in enumerate(graph.services[service]):
+                if host.supervisor:
+                    continue
+                DashboardState.hosts[host] = Host(host.name, host.machinename)
+    DashboardState.graph = graph
+    for link in graph.links:
+        DashboardState.links[link.index] = {}
 
+    # read dashboard id from topoinfodashboard file
+    id = None
+    try:
+        with open('/tmp/kollaps/topoinfodashboard', 'r', encoding='utf-8') as f:
+            id = f.readline().strip()
+    except FileNotFoundError:
+        print("Couldn't read dashboard id off of topoinfodashboard file")
+
+    startup_thread = Thread(target=query_until_ready, args=[id])
+    startup_thread.daemon = True
+    startup_thread.start()
+ 
+    app.run(host='0.0.0.0', port=8088)
+
+def main():
+    deployment = sys.argv[1]
+    topology_file = sys.argv[2]
+    match deployment:
+        case "container":
+            id = sys.argv[3]
+            pid = sys.argv[4]
+            container_deployment(topology_file, id, pid)
+        case "baremetal":
+            baremetal_deployment(topology_file)
+        case "wasm":
+            wasm_deployment(topology_file)
+        case _:
+            print(f"Unknown option {deployment}")
+        
 if __name__ == "__main__":
     main()

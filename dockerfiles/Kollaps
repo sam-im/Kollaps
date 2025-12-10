@@ -35,7 +35,7 @@ ADD ./setup.py /Kollaps/setup.py
 RUN make -C /Kollaps/kollaps/tools/pid1 && \
     cp /Kollaps/kollaps/tools/pid1/pid1 /usr/bin/pid1 && \
     make -C /Kollaps/kollaps/TCAL -j8 && \
-    cp /Kollaps/kollaps/TCAL/libTCAL.so /usr/local/bin/libTCAL.so
+    cp /Kollaps/kollaps/TCAL/libTCAL.so /usr/bin/libTCAL.so
 
 # TODO remove libcommunicationcore.so from /usr/local/bin as only dashboard uses it
 RUN cp /Kollaps/kollaps/target/release/communicationmanager /usr/bin/communicationmanager  && \

@@ -1,16 +1,19 @@
 pub mod docker;
 pub mod kubernetes;
+pub mod wasm;
 
 use crate::emulationcore::Result;
 use crate::graph::Graph;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubernetesOrchestrator;
+use crate::orchestrator::wasm::WasmOrchestrator;
 use tracing::error;
 
 #[derive(Copy, Clone)]
 pub enum Orchestrator {
     Docker(DockerOrchestrator),
     Kubernetes(KubernetesOrchestrator),
+    Wasm(WasmOrchestrator),
 }
 
 impl Orchestrator {
@@ -18,13 +21,15 @@ impl Orchestrator {
         match self {
             Orchestrator::Docker(o) => o.resolve_hostnames(graph).await,
             Orchestrator::Kubernetes(o) => o.resolve_hostnames(graph).await,
+            Orchestrator::Wasm(o) => o.resolve_hostnames(graph).await,
         }
     }
 
-    pub async fn start_experiment(&self, id: &str) {
+    pub async fn start_experiment(&self, id: &str, pid: u32) {
         match self {
             Orchestrator::Docker(_) => start_experiment(id).await,
             Orchestrator::Kubernetes(_) => start_experiment(id).await,
+            Orchestrator::Wasm(o) => o.start_experiment(id, pid).await,
         }
     }
 
@@ -32,6 +37,7 @@ impl Orchestrator {
         match self {
             Orchestrator::Docker(_) => stop_experiment(pid, signal_code).await,
             Orchestrator::Kubernetes(_) => stop_experiment(pid, signal_code).await,
+            Orchestrator::Wasm(o) => o.stop_experiment(pid, signal_code).await,
         }
     }
 }

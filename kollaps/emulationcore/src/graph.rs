@@ -18,6 +18,7 @@ use crate::elements::{Flowu16, Link, Path, Service};
 use rand::Rng;
 use std::collections::HashMap;
 use std::f32::INFINITY;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
@@ -100,8 +101,10 @@ impl Graph {
         ip: Option<u32>,
         paths: Vec<String>,
         script: Option<&str>,
+        image: Option<String>,
+        command: Option<String>,
     ) {
-        let mut service = Service::new(hostname.clone(), shared, reuse, replicas);
+        let mut service = Service::new(hostname.clone(), shared, reuse, replicas, image, command);
 
         if !script.is_none() {
             service.script = script.unwrap().to_string();
@@ -129,7 +132,7 @@ impl Graph {
     }
 
     pub fn insert_bridge(&mut self, hostname: String, ip: Option<u32>) {
-        let mut bridge = Service::new(hostname.clone(), false, false, 0);
+        let mut bridge = Service::new(hostname.clone(), false, false, 0, None, None);
 
         if ip.is_none() {
             //generate random IP to put be able to put bridges in the map
@@ -486,6 +489,7 @@ impl Graph {
     }
 
     pub async fn set_graph_root(&mut self, self_addr: u32) -> Result<(), ()> {
+        debug!("Self address: {}", Ipv4Addr::from_bits(self_addr));
         match self.services.get_mut(&self_addr) {
             Some(root) => {
                 self.graph_root = Some(Arc::clone(root));

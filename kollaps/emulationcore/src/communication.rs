@@ -24,10 +24,10 @@ use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-const READPIPE_PATH: &str = "/tmp/piperead";
-const WRITEPIPE_PATH: &str = "/tmp/pipewrite";
+const READPIPE_PATH: &str = "/tmp/kollaps/pipes/piperead";
+const WRITEPIPE_PATH: &str = "/tmp/kollaps/pipes/pipewrite";
 
 enum CommunicationCmd {
     Init {
@@ -64,10 +64,9 @@ impl Communication {
                         info!("EC {}: Communication initialized", id);
                     }
                     _ => {
-                        error!(
+                        panic!(
                             "Communication is not initialized, expected an `Init` command. Did you run `init` first?"
                         );
-                        std::process::exit(-1);
                     }
                 }
             }

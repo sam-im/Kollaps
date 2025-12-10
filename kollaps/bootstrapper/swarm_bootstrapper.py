@@ -118,7 +118,7 @@ class SwarmBootstrapper(Bootstrapper):
         
             cmd = ["nsenter", "-t", str(pid),
                    "-n", "/opt/venv/bin/python3", "/opt/venv/bin/KollapsDashboard",
-                   TOPOLOGY, str(container_id), str(pid)]
+                   "container", TOPOLOGY, str(container_id), str(pid)]
 
 
             dashboard_instance = Popen(cmd)
@@ -149,7 +149,7 @@ class SwarmBootstrapper(Bootstrapper):
             # else:
             cmd = ["nsenter",
                     "-t", str(pid),
-                    "-n", "/usr/bin/emulationcore", str(container_id), str(pid),"docker"]
+                    "-n", "/usr/bin/emulationcore", "/topology.xml", "docker", str(container_id), str(pid)]
 
             # cmd = ["cd /Kollaps/kollaps/emulationcore/","&&","nsenter",
             #         "-t", str(pid),
@@ -176,6 +176,8 @@ class SwarmBootstrapper(Bootstrapper):
         else:
             # we are the God container
             print_named("God", "bootstrapping all containers with label " + label + ".")
+
+            self.make_tmp_dir()
             
             # find IPs of all God containers in the cluster
             gods = self.resolve_ips(int(os.getenv('NUMBER_OF_GODS', 0)))
