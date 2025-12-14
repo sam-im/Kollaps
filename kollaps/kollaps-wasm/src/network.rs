@@ -12,53 +12,46 @@ pub struct Bridge {
 }
 
 impl Bridge {
-    /// Creates a new virtual bridge struct.
-    /// To create the associated bridge on linux, call `create` on this struct.
+    /// Creates a new virtual bridge using the linux `ip` command.
     ///
     /// Arguments:
     /// - name: identifier to refer to this bridge when using linux `ip`.
     /// - addr: first address of the subnet.
     /// - subnet: number of bits for host addressing in CIDR notation.
-    pub fn new(name: &str, addr: Ipv4Addr, subnet: u8) -> Self {
-        let name = name.to_string();
-        let ns_addr = Vec::new();
-
-        Self {
-            name,
-            addr,
-            subnet,
-            ns_addr,
-        }
-    }
-
-    /// Create a virtual on the host using `ip`.
-    pub fn create(&self) -> Result<()> {
+    pub fn try_new(name: &str, addr: Ipv4Addr, subnet: u8) -> Result<Self> {
         //ip link add name <name> type bridge
-        let create = || run_ip_cmd(&["link", "add", "name", self.name.as_str(), "type", "bridge"]);
+        let create = || run_ip_cmd(&["link", "add", "name", name, "type", "bridge"]);
         if let Err(e) = create() {
             // if it fails, try removing it and try again
             warn!(
                 "Failed to create namespace {}.\nError: {}.\nTrying again.",
-                self.name, e
+                name, e
             );
 
             // ip link set <name> down
-            let _ = run_ip_cmd(&["link", "set", self.name.as_str(), "down"]);
+            let _ = run_ip_cmd(&["link", "set", name, "down"]);
             // ip link del <name>
-            let _ = run_ip_cmd(&["link", "del", self.name.as_str()]);
+            let _ = run_ip_cmd(&["link", "del", name]);
 
             create()?;
         }
 
         // ip addr add <addr>/<subnet> dev <name>
-        let cidr = format!("{}/{}", self.addr, self.subnet);
-        run_ip_cmd(&["addr", "add", cidr.as_str(), "dev", self.name.as_str()])?;
+        let cidr = format!("{}/{}", addr, subnet);
+        run_ip_cmd(&["addr", "add", &cidr, "dev", name])?;
 
         // ip link set dev <name> up
-        run_ip_cmd(&["link", "set", "dev", self.name.as_str(), "up"])?;
+        run_ip_cmd(&["link", "set", "dev", name, "up"])?;
+        debug!("Created bridge {}.", name);
 
-        debug!("Created bridge {}.", self.name);
-        Ok(())
+        let name = name.to_string();
+        let ns_addr = Vec::new();
+        Ok(Self {
+            name,
+            addr,
+            subnet,
+            ns_addr,
+        })
     }
 
     pub fn create_namespace(&mut self) -> Result<Namespace> {
@@ -88,8 +81,7 @@ impl Bridge {
                 .context("Subnet is full, try again with larger subnet."));
         }
 
-        let ns = Namespace::new(name.clone(), veth, addr);
-        ns.create(&self.name, self.subnet)?;
+        let ns = Namespace::try_new(name, veth, addr, self.subnet, &self.name)?;
         self.ns_addr.push(ns.addr);
         Ok(ns)
     }
@@ -114,14 +106,85 @@ pub struct Namespace {
 }
 
 impl Namespace {
-    fn new(name: String, veth: String, addr: Ipv4Addr) -> Self {
+    fn try_new(
+        name: String,
+        veth: String,
+        addr: Ipv4Addr,
+        subnet: u8,
+        bridge_name: &str,
+    ) -> Result<Self> {
         let veth_peer = format!("{}_p", &veth);
-        Self {
+
+        // ip netns add <name>
+        let create = || run_ip_cmd(&["netns", "add", name.as_str()]);
+        if let Err(e) = create() {
+            // if it fails, try removing it and try again
+            warn!(
+                "Failed to create namespace {}.\nError: {}.\nTrying again.",
+                name, e
+            );
+            run_ip_cmd(&["netns", "del", name.as_str()])?;
+            create()?;
+        }
+        // ip link add <veth> type veth peer name <veth_peer>
+        run_ip_cmd(&[
+            "link",
+            "add",
+            veth.as_str(),
+            "type",
+            "veth",
+            "peer",
+            "name",
+            veth_peer.as_str(),
+        ])?;
+        // ip link set <veth> netns <name>
+        run_ip_cmd(&["link", "set", veth.as_str(), "netns", name.as_str()])?;
+        // ip link set <veth_peer> master <bridge>
+        run_ip_cmd(&["link", "set", veth_peer.as_str(), "master", bridge_name])?;
+        // ip link set <veth_peer> up
+        run_ip_cmd(&["link", "set", veth_peer.as_str(), "up"])?;
+        // ip netns exec <name> ip addr add <addr> dev <veth>
+        run_ip_cmd(&[
+            "netns",
+            "exec",
+            name.as_str(),
+            "ip",
+            "addr",
+            "add",
+            &format!("{}/{}", addr, subnet),
+            "dev",
+            veth.as_str(),
+        ])?;
+        // ip netns exec <name> ip link set <veth> up
+        run_ip_cmd(&[
+            "netns",
+            "exec",
+            name.as_str(),
+            "ip",
+            "link",
+            "set",
+            veth.as_str(),
+            "up",
+        ])?;
+        // ip netns exec <name> ip link set lo up
+        run_ip_cmd(&[
+            "netns",
+            "exec",
+            name.as_str(),
+            "ip",
+            "link",
+            "set",
+            "lo",
+            "up",
+        ])?;
+        debug!("Created namespace {}.", name);
+
+        Ok(Self {
             name,
             veth,
             veth_peer,
             addr,
-        }
+        })
     }
     pub fn name(&self) -> &str {
         &self.name
@@ -131,78 +194,6 @@ impl Namespace {
     }
     pub fn addr(&self) -> &Ipv4Addr {
         &self.addr
-    }
-    fn create(&self, bridge: &str, subnet: u8) -> Result<()> {
-        // ip netns add <name>
-        let create = || run_ip_cmd(&["netns", "add", self.name.as_str()]);
-        if let Err(e) = create() {
-            // if it fails, try removing it and try again
-            warn!(
-                "Failed to create namespace {}.\nError: {}.\nTrying again.",
-                self.name, e
-            );
-            run_ip_cmd(&["netns", "del", self.name.as_str()])?;
-            create()?;
-        }
-        // ip link add <veth> type veth peer name <veth_peer>
-        run_ip_cmd(&[
-            "link",
-            "add",
-            self.veth.as_str(),
-            "type",
-            "veth",
-            "peer",
-            "name",
-            self.veth_peer.as_str(),
-        ])?;
-        // ip link set <veth> netns <name>
-        run_ip_cmd(&[
-            "link",
-            "set",
-            self.veth.as_str(),
-            "netns",
-            self.name.as_str(),
-        ])?;
-        // ip link set <veth_peer> master <bridge>
-        run_ip_cmd(&["link", "set", self.veth_peer.as_str(), "master", bridge])?;
-        // ip link set <veth_peer> up
-        run_ip_cmd(&["link", "set", self.veth_peer.as_str(), "up"])?;
-        // ip netns exec <name> ip addr add <addr> dev <veth>
-        run_ip_cmd(&[
-            "netns",
-            "exec",
-            self.name.as_str(),
-            "ip",
-            "addr",
-            "add",
-            &format!("{}/{}", self.addr, subnet),
-            "dev",
-            self.veth.as_str(),
-        ])?;
-        // ip netns exec <name> ip link set <veth> up
-        run_ip_cmd(&[
-            "netns",
-            "exec",
-            self.name.as_str(),
-            "ip",
-            "link",
-            "set",
-            self.veth.as_str(),
-            "up",
-        ])?;
-        // ip netns exec <name> ip link set lo up
-        run_ip_cmd(&[
-            "netns",
-            "exec",
-            self.name.as_str(),
-            "ip",
-            "link",
-            "set",
-            "lo",
-            "up",
-        ])?;
-        debug!("Created namespace {}.", self.name);
-        Ok(())
     }
 }
 

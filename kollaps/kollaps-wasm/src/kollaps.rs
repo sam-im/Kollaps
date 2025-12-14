@@ -1,13 +1,11 @@
 use crate::comms::CommunicationManager;
 use crate::config::Config;
 use crate::ecore::EmulationCore;
+use crate::files::{Files, FilesBuilder};
 use crate::network::Bridge;
 use crate::service::{ActiveService, ReadyService, Service, parse_services};
 
-use std::fs;
 use std::net::Ipv4Addr;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
@@ -18,6 +16,7 @@ use tracing::{debug, info};
 
 pub struct Kollaps {
     config: Config,
+    files: Option<Files>,
     bridge: Option<Bridge>,
     comms: Option<CommunicationManager>,
     services: Option<Vec<ActiveService>>,
@@ -28,6 +27,7 @@ impl Kollaps {
     pub fn new(config: Config) -> Self {
         Self {
             config,
+            files: None,
             bridge: None,
             services: None,
             comms: None,
@@ -40,8 +40,8 @@ impl Kollaps {
 
         self.bridge = Some(self.make_bridge("kollaps")?);
         let services = self.make_ready_services(services)?;
+        self.files = Some(self.make_tempdir(&services)?);
 
-        self.make_tempdir(&services)?;
         self.comms = Some(self.make_comms(services.len())?);
         self.services = Some(self.make_active_services(services)?);
         self.ecores = Some(self.make_ecores()?);
@@ -66,7 +66,6 @@ impl Kollaps {
             signal_hook::flag::register(*sig, Arc::clone(&term))
                 .context("Failed to set signal handlers.")?;
         }
-
         info!("Ready. Start dashboard or hit CTRL+C to exit.");
 
         // Exits if the signal flag is set, or all ecore instances have exited.
@@ -80,15 +79,12 @@ impl Kollaps {
                 break;
             }
         }
-
         Ok(())
     }
 
     fn make_bridge(&mut self, name: &str) -> Result<Bridge> {
         info!("Creating virtual bridge.");
-        let bridge = Bridge::new(name, self.config.addr, self.config.subnet);
-        bridge
-            .create()
+        let bridge = Bridge::try_new(name, self.config.addr, self.config.subnet)
             .context(format!("failed to create bridge {}", name))?;
 
         Ok(bridge)
@@ -110,8 +106,8 @@ impl Kollaps {
         Ok(ready_services)
     }
 
-    fn make_tempdir(&self, services: &[ReadyService]) -> Result<()> {
-        info!("Setting up temporary directory.");
+    fn make_tempdir(&self, services: &[ReadyService]) -> Result<Files> {
+        info!("Setting up temporary directories.");
         let mut topoinfo = String::new();
         let mut topoinfodashboard = String::new();
         services.iter().for_each(|s| {
@@ -124,40 +120,16 @@ impl Kollaps {
             }
         });
 
-        let dirs = vec![
-            (&self.config.tmp_dir, 0o775),
-            (&self.config.pipes_dir, 0o777),
-            (&self.config.logs_dir, 0o777),
-        ];
-        for dir in dirs {
-            let _ = fs::create_dir(dir.0);
-            fs::set_permissions(dir.0, fs::Permissions::from_mode(dir.1))?;
-        }
+        let files = FilesBuilder::new()
+            .add_dir(&self.config.tmp_dir, Some(0o775))
+            .add_dir(&self.config.logs_dir, Some(0o777))
+            .add_temp_dir(&self.config.pipes_dir, Some(0o777))
+            .add_temp_file(&self.config.remote_ips_path, String::new())
+            .add_temp_file(&self.config.topoinfo_path, topoinfo)
+            .add_temp_file(&self.config.topoinfodashboard_path, topoinfodashboard)
+            .try_build()?;
 
-        fs::File::create(&self.config.remote_ips_path)
-            .context("failed to create empty remote_ips file in temp dir")?;
-
-        let debug = |path: &PathBuf, content: &str| {
-            debug!(
-                "\nWrote\n-----\n{}\n-----\nto {}.",
-                content,
-                path.to_string_lossy(),
-            );
-        };
-
-        fs::write(&self.config.topoinfo_path, &topoinfo).context(format!(
-            "failed to write to {:?}",
-            &self.config.topoinfo_path
-        ))?;
-        debug(&self.config.topoinfo_path, &topoinfo);
-
-        fs::write(&self.config.topoinfodashboard_path, &topoinfodashboard).context(format!(
-            "failed to write to {:?}",
-            &self.config.topoinfodashboard_path
-        ))?;
-        debug(&self.config.topoinfodashboard_path, &topoinfodashboard);
-
-        Ok(())
+        Ok(files)
     }
 
     fn make_comms(&self, service_count: usize) -> Result<CommunicationManager> {

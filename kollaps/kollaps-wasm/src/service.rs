@@ -148,10 +148,9 @@ impl ActiveService {
                     debug!("{} received SIGCONT.", service.id());
 
                     // TODO: consider running the service as non-root
-                    // 0. impl. arg for 'run service as user'
-                    // 1. check config for a username
-                    // 2. find uid
-                    // 3. setuid to that user
+                    // 1. implement argument and config changes for run-as-user
+                    // 2. find uid of arg. provided username
+                    // 3. setuid to it
 
                     // Redirects the outputs of the child to a logfile.
                     let log_file = CString::new(
@@ -161,7 +160,6 @@ impl ActiveService {
                             .to_string_lossy()
                             .as_bytes(),
                     )?;
-                    // CString::new(format!("{}{}.log", config.logs_dir, service.id()))?;
                     let fd = libc::open(
                         log_file.as_ptr(),
                         libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
@@ -204,7 +202,7 @@ impl ActiveService {
                             .join(" "),
                         err,
                     );
-                    std::process::exit(-1);
+                    std::process::exit(1);
                 }
                 pid if pid < 0 => {
                     error!("Failed to fork service handler, error code: {}", pid);
@@ -225,16 +223,16 @@ impl ActiveService {
         self.pid
     }
     pub fn id(&self) -> &str {
-        &self.service.id
+        &self.service.id()
     }
     pub fn name(&self) -> &str {
-        &self.service.service.name
+        &self.service.service.name()
     }
     pub fn veth(&self) -> &str {
-        self.service.ns.veth()
+        self.service.ns().veth()
     }
     pub fn ns_name(&self) -> &str {
-        self.service.ns.name()
+        self.service.ns().name()
     }
 }
 
