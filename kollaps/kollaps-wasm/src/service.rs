@@ -92,7 +92,7 @@ pub struct ActiveService {
 impl ActiveService {
     /// Try and create a new `ActiveService` from a `ReadyService`.
     /// The argument `alist` is an association list of all the service names and addresses,
-    /// used to parse variables in the `service` command.
+    /// used to parse variables, if any, from the command of a `service`.
     pub fn try_new(
         config: &Config,
         service: ReadyService,

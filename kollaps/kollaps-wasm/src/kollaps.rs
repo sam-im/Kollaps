@@ -5,6 +5,7 @@ use crate::files::{Files, FilesBuilder};
 use crate::network::Bridge;
 use crate::service::{ActiveService, ReadyService, Service, parse_services};
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +15,11 @@ use std::time::Duration;
 use anyhow::{Context, Error, Result};
 use tracing::{debug, info};
 
+/// Represents the application state.
+/// It holds handles to network, processes, and files, which is used
+/// to perform clean-up at exit.
+///
+/// TODO: add example
 pub struct Kollaps {
     config: Config,
     files: Option<Files>,
@@ -24,6 +30,8 @@ pub struct Kollaps {
 }
 
 impl Kollaps {
+    /// Create a new `Kollaps` instance.
+    /// It requires an argument of `Config` that holds various configurations and paths.
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -108,6 +116,8 @@ impl Kollaps {
 
     fn make_tempdir(&self, services: &[ReadyService]) -> Result<Files> {
         info!("Setting up temporary directories.");
+
+        // prepare contents of topoinfo/topoinfodashboard
         let mut topoinfo = String::new();
         let mut topoinfodashboard = String::new();
         services.iter().for_each(|s| {
@@ -120,6 +130,27 @@ impl Kollaps {
             }
         });
 
+        // prepare contents of /etc/hosts
+        let name_addr_pairs = services
+            .iter()
+            .map(|s| (s.name().to_owned(), s.addr().to_owned()))
+            .collect::<Vec<(String, Ipv4Addr)>>();
+        let mut name_counts: HashMap<String, usize> = HashMap::new(); // used to check if a service is replicated
+        let mut hosts = std::fs::read_to_string(&self.config.hosts_path)?; // current hosts file content
+
+        hosts.push_str("\n# start of lines added by Kollaps\n");
+        name_addr_pairs.iter().for_each(|(name, addr)| {
+            let count = name_counts.entry(name.to_owned()).or_insert(0);
+            *count += 1;
+            let hostname = match name_addr_pairs.iter().filter(|(n, _)| n == name).count() {
+                i if i > 1 => format!("{}{}", name, count),
+                _ => name.to_owned(),
+            };
+            hosts.push_str(&format!("{}\t{}\n", addr, hostname));
+        });
+        hosts.push_str("# end of lines added by Kollaps\n");
+
+        // configure and create `Files`
         let files = FilesBuilder::new()
             .add_dir(&self.config.tmp_dir, Some(0o775))
             .add_dir(&self.config.logs_dir, Some(0o777))
@@ -127,6 +158,7 @@ impl Kollaps {
             .add_temp_file(&self.config.remote_ips_path, String::new())
             .add_temp_file(&self.config.topoinfo_path, topoinfo)
             .add_temp_file(&self.config.topoinfodashboard_path, topoinfodashboard)
+            .add_protected_file(&self.config.hosts_path, hosts)
             .try_build()?;
 
         Ok(files)

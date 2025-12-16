@@ -9,6 +9,7 @@ pub struct Config {
     pub remote_ips_path: PathBuf,
     pub topoinfo_path: PathBuf,
     pub topoinfodashboard_path: PathBuf,
+    pub hosts_path: PathBuf,
     pub executables_dir: PathBuf,
     pub topology_path: PathBuf,
     pub allow_dir: Option<PathBuf>,
@@ -24,6 +25,7 @@ impl Default for Config {
         let remote_ips_path = tmp_dir.join("remote_ips.txt");
         let topoinfo_path = tmp_dir.join("topoinfo");
         let topoinfodashboard_path = tmp_dir.join("topoinfodashboard");
+        let hosts_path = PathBuf::from("/etc/hosts");
         let executables_dir = env::current_exe()
             .ok()
             .and_then(|p| p.parent().and_then(|p| Some(p.to_path_buf())))
@@ -41,6 +43,7 @@ impl Default for Config {
             remote_ips_path,
             topoinfo_path,
             topoinfodashboard_path,
+            hosts_path,
             executables_dir,
             topology_path,
             allow_dir,
