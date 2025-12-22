@@ -1,4 +1,4 @@
-# Structure
+# Worspace Structure
 .
 ├── bootstrapper  ----------> Handles container deployments
 ├── capnp-schemas  ---------> Shared message type for metadata dissemination
@@ -8,11 +8,11 @@
 ├── dashboard  -------------> Start/stop/view experiments
 ├── emulationcore  ---------> Emulates network properties per service
 ├── kollaps-wasm  ----------> Handles WASI and non-containerized deployments
-├── kollaps-wasm-runtime ---> Default WASI runtime used by kollaps-wasm
+├── kollaps-wasm-runtime ---> Default WASI runtime
 ├── monitor  ---------------> eBPF userspace library
 ├── monitor-common  --------> eBPF shared datastructures
 ├── monitor-ebpf    --------> eBPF kernel program
-├── TCAL  ------------------> TC Abstraction Layer (`tc` compiled as a library)
+├── TCAL  ------------------> tc abstraction layer
 └── tools  -----------------> Utilities and language extensions
 
 # Building 

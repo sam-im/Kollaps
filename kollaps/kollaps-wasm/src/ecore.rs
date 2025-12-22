@@ -5,7 +5,7 @@ use std::{
     process::{Child, Command},
 };
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tracing::debug;
 
 /// Represents a running Emulationcore instance.

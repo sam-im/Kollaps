@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     info!("Running kollaps.");
     match kollaps.run() {
         Ok(_) => info!("Exiting."),
-        Err(e) => error!("Kollaps is exiting with an error:\n{}.", e),
+        Err(e) => error!("Exiting with an error:\n{}.", e),
     }
 
     Ok(())
