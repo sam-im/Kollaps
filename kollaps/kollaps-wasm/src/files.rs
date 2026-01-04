@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tracing::warn;
@@ -51,27 +51,27 @@ impl FilesBuilder {
         Files::try_new(self.files)
     }
     /// Add a to-be-created directory that will not be removed at cleanup.
-    pub fn add_dir(mut self, path: &PathBuf, perms: Option<u32>) -> Self {
-        let dir = File::Directory(path.clone(), perms);
+    pub fn add_dir(mut self, path: &Path, perms: Option<u32>) -> Self {
+        let dir = File::Directory(path.to_path_buf(), perms);
         self.files.push(dir);
         self
     }
     /// Add a to-be-created directory that will be recursively deleted at cleanup.
-    pub fn add_temp_dir(mut self, path: &PathBuf, perms: Option<u32>) -> Self {
-        let dir = File::TempDirectory(path.clone(), perms);
+    pub fn add_temp_dir(mut self, path: &Path, perms: Option<u32>) -> Self {
+        let dir = File::TempDirectory(path.to_path_buf(), perms);
         self.files.push(dir);
         self
     }
     /// Add a to-be-created text file that will be removed at cleanup.
-    pub fn add_temp_file(mut self, path: &PathBuf, content: String) -> Self {
-        let file = File::TempRegular(path.clone(), content);
+    pub fn add_temp_file(mut self, path: &Path, content: String) -> Self {
+        let file = File::TempRegular(path.to_path_buf(), content);
         self.files.push(file);
         self
     }
     /// Replaces the content of an existing file with `content`, and restores the original
     /// content at cleanup.
-    pub fn add_protected_file(mut self, path: &PathBuf, content: String) -> Self {
-        let file = File::ProtectedRegular(path.clone(), content, String::new());
+    pub fn add_protected_file(mut self, path: &Path, content: String) -> Self {
+        let file = File::ProtectedRegular(path.to_path_buf(), content, String::new());
         self.files.push(file);
         self
     }

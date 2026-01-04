@@ -223,10 +223,10 @@ impl ActiveService {
         self.pid
     }
     pub fn id(&self) -> &str {
-        &self.service.id()
+        self.service.id()
     }
     pub fn name(&self) -> &str {
-        &self.service.service.name()
+        self.service.service.name()
     }
     pub fn veth(&self) -> &str {
         self.service.ns().veth()

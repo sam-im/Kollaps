@@ -1,6 +1,11 @@
 use crate::Args;
 
-use std::{env, net::Ipv4Addr, path::PathBuf};
+use std::{
+    env,
+    net::Ipv4Addr,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 pub struct Config {
     pub tmp_dir: PathBuf,
@@ -19,19 +24,27 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         let tmp_dir = env::temp_dir().join("kollaps");
-        let logs_dir = tmp_dir.join("logs");
+        let logs_dir = tmp_dir.join(format!("logs_{}", timestamp));
+
         let pipes_dir = tmp_dir.join("pipes");
         let remote_ips_path = tmp_dir.join("remote_ips.txt");
         let topoinfo_path = tmp_dir.join("topoinfo");
         let topoinfodashboard_path = tmp_dir.join("topoinfodashboard");
+
         let hosts_path = PathBuf::from("/etc/hosts");
         let executables_dir = env::current_exe()
             .ok()
-            .and_then(|p| p.parent().and_then(|p| Some(p.to_path_buf())))
-            .and_then(|p| Some(p.join("bin")))
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("bin"))
             .unwrap_or_else(|| PathBuf::from("./bin"));
         let topology_path = PathBuf::from("topology.xml");
+
         let allow_dir = None;
         let addr = Ipv4Addr::new(10, 10, 10, 0);
         let subnet = 24;

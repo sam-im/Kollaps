@@ -5,7 +5,7 @@ use std::{
     process::{Child, Command},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use tracing::debug;
 
 /// Represents a running Emulationcore instance.
@@ -40,7 +40,7 @@ impl EmulationCore {
             ])
             .stdout(stdout.try_clone()?)
             .stderr(stdout)
-            .current_dir(&config.executables_dir.parent().unwrap())
+            .current_dir(config.executables_dir.parent().unwrap())
             .spawn()?;
 
         let service_id = service.id().to_owned();
