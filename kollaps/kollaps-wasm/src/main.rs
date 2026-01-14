@@ -17,13 +17,16 @@ use tracing::{Level, error, info, subscriber};
 use tracing_subscriber::FmtSubscriber;
 
 fn main() -> Result<()> {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
-        .finish();
-    subscriber::set_global_default(subscriber)?;
-
     let args = Args::parse();
     let config = Config::from(args);
+
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(match config.verbose {
+            false => Level::INFO,
+            true => Level::DEBUG,
+        })
+        .finish();
+    subscriber::set_global_default(subscriber)?;
 
     let mut kollaps = Kollaps::new(config);
 
@@ -51,4 +54,7 @@ struct Args {
     /// the default runtime's working directory.
     #[arg(long)]
     allow_dir: Option<PathBuf>,
+    /// Increase verbosity of logs.
+    #[arg(short, long)]
+    verbose: bool,
 }

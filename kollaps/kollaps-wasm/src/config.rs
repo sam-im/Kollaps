@@ -20,6 +20,7 @@ pub struct Config {
     pub allow_dir: Option<PathBuf>,
     pub addr: Ipv4Addr,
     pub subnet: u8,
+    pub verbose: bool,
 }
 
 impl Default for Config {
@@ -48,6 +49,7 @@ impl Default for Config {
         let allow_dir = None;
         let addr = Ipv4Addr::new(10, 10, 10, 0);
         let subnet = 24;
+        let verbose = false;
 
         Self {
             tmp_dir,
@@ -62,6 +64,7 @@ impl Default for Config {
             allow_dir,
             addr,
             subnet,
+            verbose,
         }
     }
 }
@@ -80,6 +83,7 @@ impl From<Args> for Config {
         if let Some(subnet) = args.subnet {
             config.subnet = subnet;
         }
+        config.verbose = args.verbose;
 
         config
     }
