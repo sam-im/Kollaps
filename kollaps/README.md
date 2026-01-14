@@ -15,18 +15,7 @@
 ├── TCAL  ------------------> tc abstraction layer
 └── tools  -----------------> Utilities and language extensions
 
-# Building 
-## TCAL
-### Dependencies
-Building requires the following packages `build-essential bison flex`.
-The package `build-essential` might have different names in other linux distributions.
-
-Example:
-- Debian 12: `apt install build-essential bison flex`
-
-### Build
-Run `make` inside `TCAL/`.
-
+# Build
 ## Rust Crates
 ### Dependencies
 The `monitor` and `capnp-schemas` crates require the following extra dependencies.
@@ -42,3 +31,20 @@ The `monitor` and `capnp-schemas` crates require the following extra dependencie
 ### Build
 Run `cargo build --release` in the root of the workspace.
 The compiled binaries will be located in `./target/release/`.
+
+## C Libraries
+### TCAL
+#### Dependencies
+Building requires the following packages `build-essential bison flex`.
+The package `build-essential` might have different names in other linux distributions.
+
+Example:
+- Debian 12: `apt install build-essential bison flex`
+
+#### Build
+Run `make` inside `TCAL/`.
+
+### pid1
+#### Build
+Run `make` inside `tools/pid1/`.
+

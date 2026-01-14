@@ -32,16 +32,22 @@ RUN /opt/venv/bin/pip install \
 ADD ./kollaps/ /Kollaps/kollaps
 ADD ./setup.py /Kollaps/setup.py
 
-RUN make -C /Kollaps/kollaps/tools/pid1 && \
-    cp /Kollaps/kollaps/tools/pid1/pid1 /usr/bin/pid1 && \
-    make -C /Kollaps/kollaps/TCAL -j8 && \
-    cp /Kollaps/kollaps/TCAL/libTCAL.so /usr/bin/libTCAL.so
+# For development you might want to comment out the following RUN statement and
+# uncomment the one just after it. 
+RUN curl -L -O "https://github.com/sam-im/Kollaps/releases/download/2.1.0/kollaps-binaries.tar.gz" && \
+    tar -xzf kollaps-binaries.tar.gz && \
+    mv kollaps-binaries/pid1 /usr/bin/ && \
+    mv kollaps-binaries/libTCAL.so /usr/bin/ && \
+    mv kollaps-binaries/communicationmanager /usr/bin/ && \
+    mv kollaps-binaries/emulationcore /usr/bin/ && \                            
+    mv kollaps-binaries/libcommunicationcore.so /Kollaps/kollaps/dashboard/
 
-# TODO remove libcommunicationcore.so from /usr/local/bin as only dashboard uses it
-RUN cp /Kollaps/kollaps/target/release/communicationmanager /usr/bin/communicationmanager  && \
-    cp /Kollaps/kollaps/target/release/emulationcore /usr/bin/emulationcore  && \
-    cp /Kollaps/kollaps/target/release/libcommunicationcore.so /usr/local/bin/libcommunicationcore.so && \
-    cp /Kollaps/kollaps/target/release/libcommunicationcore.so /Kollaps/kollaps/dashboard/
+# For build instructions, see `Kollaps/kollaps/README.md`.
+# RUN cp /Kollaps/kollaps/tools/pid1/pid1 /usr/bin/ && \
+#     cp /Kollaps/kollaps/TCAL/libTCAL.so /usr/bin/ && \
+#     cp /Kollaps/kollaps/target/release/communicationmanager /usr/bin/ && \
+#     cp /Kollaps/kollaps/target/release/emulationcore /usr/bin/ && \
+#     cp /Kollaps/kollaps/target/release/libcommunicationcore.so /Kollaps/kollaps/dashboard/
 
 RUN /opt/venv/bin/pip wheel --no-deps -w /Kollaps /Kollaps && \
     /opt/venv/bin/pip install /Kollaps/kollaps-2.0-py3-none-any.whl
