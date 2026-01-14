@@ -1,4 +1,4 @@
-# Worspace Structure
+# Workspace Structure
 .
 ├── bootstrapper  ----------> Handles container deployments
 ├── capnp-schemas  ---------> Shared message type for metadata dissemination
