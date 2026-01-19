@@ -1,8 +1,11 @@
+use crate::{config::Config, network::Namespace};
+
+use std::ffi::CString;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::ptr;
 use std::str::FromStr;
-use std::{ffi::CString, net::Ipv4Addr};
 
-use crate::{config::Config, network::Namespace};
 use anyhow::{Context, Error, Result};
 use libc::{SIGSTOP, execvp, raise};
 use tracing::{debug, error, info, warn};
@@ -107,21 +110,40 @@ impl ActiveService {
             to_cstr(service.ns().name())?,
         ];
 
-        // If the image tag is a WASM module, run it with our default runtime.
+        // If the image tag is a WASM module, run it with the default runtime.
         if service.image().ends_with(".wasm") {
             cstrings.push(to_cstr(
                 &config
                     .executables_dir
+                    .canonicalize()?
                     .join("kollaps-wasm-runtime")
                     .to_string_lossy(),
             )?);
-            cstrings.push(to_cstr(service.image())?);
             if let Some(allow_dir) = &config.allow_dir {
                 cstrings.push(to_cstr("--dir")?);
                 cstrings.push(to_cstr(&allow_dir.to_string_lossy())?);
             }
+        }
+
+        let image_path = PathBuf::from(service.image());
+        if image_path.is_absolute() {
+            cstrings.push(to_cstr(&image_path.to_string_lossy())?);
         } else {
-            cstrings.push(to_cstr(service.image())?);
+            // If a user provides a relative path for a service's image,
+            // it should be better to canonicalize it relative to the topology file,
+            // as this seems to be the most intuitive behaviour one expects.
+            let topology_path = &config.topology_path.canonicalize()?;
+            let topology_dir = match topology_path.parent() {
+                Some(p) => PathBuf::from(p),
+                None => PathBuf::from("/"),
+            };
+            let image_path = match topology_dir.join(image_path).canonicalize() {
+                // Either it's a valid path to an WASM module or executable,
+                Ok(p) => p,
+                // or an executable name from $PATH.
+                Err(_) => service.image().into(),
+            };
+            cstrings.push(to_cstr(&image_path.to_string_lossy())?);
         }
 
         let service_args = match service.command() {
@@ -187,7 +209,7 @@ impl ActiveService {
                     execvp(argv[0], argv.as_ptr());
 
                     // If the following code executes, then `exec` have failed,
-                    // and the child needs to call `std::process::exit` to avoid
+                    // then the child needs to call `std::process::exit` to avoid
                     // running any destructors.
                     // This can be improved by implementing a flag that is set
                     // by the child to conditionally run destructors.
@@ -287,6 +309,10 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     };
     debug!("Services = {:#?}", services);
     Ok(services)
+}
+
+fn parse_image() {
+    
 }
 
 /// Parses a command and returns a vector containing arguments to be used as an argv for a service process.
