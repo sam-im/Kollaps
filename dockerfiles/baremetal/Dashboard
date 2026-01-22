@@ -24,19 +24,18 @@ ADD ./baremetal /Kollaps/baremetal
 ADD ./setup.py /Kollaps/setup.py
 ADD ./baremetal/.ssh /root/.ssh/
 
+RUN curl -L -O "https://github.com/sam-im/Kollaps/releases/download/2.1.0/kollaps-binaries.tar.gz" && \
+    tar -xzf kollaps-binaries.tar.gz && \
+    mv kollaps-binaries/libcommunicationcore.so /Kollaps/kollaps/dashboard/
+
 # Install Python deps, build wheels, install your package
-RUN cp /Kollaps/kollaps/target/release/libcommunicationcore.so /Kollaps/kollaps/dashboard/ && \
-    /opt/venv/bin/pip install dnspython flask docker kubernetes netifaces openssh_wrapper netaddr && \
+RUN /opt/venv/bin/pip install wheel dnspython flask docker kubernetes netifaces openssh_wrapper netaddr && \
     /opt/venv/bin/pip wheel --no-deps -w /Kollaps /Kollaps && \
     /opt/venv/bin/pip install /Kollaps/kollaps-2.0-py3-none-any.whl
 
-
-RUN apt-get purge -y python3-pip python3-venv && \
+RUN rm -r kollaps-binaries && \
+    apt-get purge -y python3-pip python3-venv && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-# If you end up updating the binaries inside the baremetal directory or, depend on the newer versions, know that,
-# the Dashboard API has changed and you will need to provide the type of the deployment as the first argument.
-# i.e. you will need to use the following instead:
-# ENTRYPOINT ["/opt/venv/bin/python3", "-m", "kollaps.dashboard.Dashboard", "baremetal", "baremetal/topology.xml"]
-ENTRYPOINT ["/opt/venv/bin/python3", "-m", "kollaps.dashboard.Dashboard", "baremetal/topology.xml"]
+ENTRYPOINT ["/opt/venv/bin/python3", "-m", "kollaps.dashboard.Dashboard", "baremetal", "baremetal/topology.xml"]

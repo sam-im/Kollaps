@@ -44,10 +44,10 @@ fn main() -> Result<()> {
 struct Args {
     /// Specifies a path to a topology file.
     topology: PathBuf,
-    /// Sets a custom address in CIDR notation.
+    /// Sets a custom address in CIDR notation. Defaults to 10.10.10.0.
     #[arg(long)]
     addr: Option<Ipv4Addr>,
-    /// Sets a custom subnet mask in CIDR notation.
+    /// Sets a custom subnet mask in CIDR notation. Defaults to 24.
     #[arg(long)]
     subnet: Option<u8>,
     /// Allow the specified directory to be accessible within

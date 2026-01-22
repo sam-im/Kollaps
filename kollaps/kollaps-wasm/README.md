@@ -47,8 +47,8 @@ Arguments:
   <TOPOLOGY>  Specifies a path to a topology file
 
 Options:
-      --addr <ADDR>            Sets a custom address in CIDR notation
-      --subnet <SUBNET>        Sets a custom subnet mask in CIDR notation
+      --addr <ADDR>            Sets a custom address in CIDR notation. Defaults to 10.10.10.0
+      --subnet <SUBNET>        Sets a custom subnet mask in CIDR notation. Defaults to 24
       --allow-dir <ALLOW_DIR>  Allow the specified directory to be accessible within the default runtime's working directory
   -v, --verbose                Increase verbosity of logs
   -h, --help                   Print help

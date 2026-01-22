@@ -311,10 +311,6 @@ pub fn parse_services(config: &Config) -> Result<Vec<Service>> {
     Ok(services)
 }
 
-fn parse_image() {
-    
-}
-
 /// Parses a command and returns a vector containing arguments to be used as an argv for a service process.
 /// An argument that starts with a '$' and is a service name designates a variable to be replaced by the address
 /// of the respective service.
