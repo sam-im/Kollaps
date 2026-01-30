@@ -4,9 +4,10 @@ The topology file imitates the iperf3 example of swarm/docker orchestrator deplo
 It requires an `iperf3` executable to be available in PATH.
 
 ## Preparation
-See `Kollaps/kollaps/kollaps-wasm/README.md` and prepare a folder with the required build artifacts.
+Running this example requires `kollaps-wasm` and `dashboard`.
+The file `Kollaps/docs/wasm.md` contains step-by-step instructions to install them both.
 
-You will also require the dashboard to control the experiment, see its readme at `Kollaps/kollaps/dashboard/README.md`.
+To build it yourself, see `Kollaps/kollaps/kollaps-wasm/README.md` and `Kollaps/kollaps/dashboard/README.md`.
 
 ## Running
 Start kollaps-wasm:
@@ -14,7 +15,7 @@ Start kollaps-wasm:
 sudo ./kollaps-wasm topology.xml
 ```
 
-Start dashboard:
+When indicated by `kollaps-wasm`'s output, start the dashboard in a second shell:
 ```
 ./dashboard/venv/bin/python3 -m kollaps.dashboard.Dashboard wasm topology.xml
 ```

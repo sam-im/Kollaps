@@ -1,10 +1,16 @@
-# WebAssembly Deployments
+# WebAssembly Deployments Quickstart
+[Demonstration Video](https://drive.switch.ch/index.php/s/3KHR7d34cKwL79q)
+
+The following instructions allow running the WASM experiment defined in `examples/kollaps-wasm/wasm/`.
+
+For further instructions see `kollaps/kollaps-wasm/README.md`.
 
 ## Prerequisites
 1. The Dashboard requires to following packages:
    - `python3`
    - `python3-dev`
    - `python3-venv`
+
    Installing them on Debian 12 is as follows:
    ```
    sudo apt install python3 python3-dev python3-venv
@@ -49,7 +55,7 @@ tar -xzf kollaps-wasm.tar.gz
 rm kollaps-wasm.tar.gz
 ```
 
-If everything went well, you should have the following folder:
+If everything went well, you should have the following directories:
 ```
 installation-dir/
 ├── dashboard/
@@ -59,7 +65,7 @@ installation-dir/
     └── kollaps-wasm
 ```
 
-## Usage
+## Run an example WASM experiment
 1. Start `kollaps-wasm` with the example WebAssembly topology in one terminal:
 ```
 sudo ./kollaps-wasm/kollaps-wasm ../Kollaps/examples/kollaps-wasm/wasm/topology.xml

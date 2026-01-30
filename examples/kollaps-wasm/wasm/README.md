@@ -1,15 +1,14 @@
 # Running kollaps-wasm experiments with WASM modules
 This topology file imitates the iperf3 example of swarm/docker orchestrator deployments.
 
-You might need to update the image tag's of services in topology.xml to make them point to the appropriate WASM modules.
-
 You can use the already built WASM modules that exists within this directory (simple-client.wasm and simple-server.wasm), 
 or if you want to build them yourself, see their respective READMEs.
 
-## Preparation
-Read `Kollaps/kollaps/kollaps-wasm/README.md` and prepare a folder with the required build artifacts.
+## Prerequisites
+Running this example requires `kollaps-wasm` and `dashboard`.
+The file `Kollaps/docs/wasm.md` contains step-by-step instructions to install them both.
 
-You will also require the dashboard to control the experiment, see its readme at `Kollaps/kollaps/dashboard/README.md`.
+To build it yourself, see `Kollaps/kollaps/kollaps-wasm/README.md` and `Kollaps/kollaps/dashboard/README.md`.
 
 ## Running
 Start kollaps-wasm:
@@ -17,7 +16,7 @@ Start kollaps-wasm:
 sudo ./kollaps-wasm topology.xml
 ```
 
-Start dashboard:
+When indicated by `kollaps-wasm`'s output, start the dashboard in a second shell:
 ```
 ./dashboard/venv/bin/python3 -m kollaps.dashboard.Dashboard wasm topology.xml
 ```
